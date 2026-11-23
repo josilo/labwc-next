@@ -1,7 +1,7 @@
 # labwc-next
 
-This is an unofficial fork of [labwc](https://github.com/labwc/labwc). It is
-not affiliated with or endorsed by the upstream project.
+This is an unofficial, opinionated fork of [labwc](https://github.com/labwc/labwc).
+It is not affiliated with or endorsed by the upstream project.
 
 ## What Is This?
 
