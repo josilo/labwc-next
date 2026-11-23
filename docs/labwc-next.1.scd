@@ -1,12 +1,12 @@
-labwc(1)
+labwc-next(1)
 
 # NAME
 
-labwc - a Wayland stacking compositor
+labwc-next - a Wayland stacking compositor
 
 # SYNOPSIS
 
-*labwc* [options...]
+*labwc-next* [options...]
 
 # DESCRIPTION
 
@@ -22,11 +22,11 @@ The compositor will exit or reload its configuration upon receiving SIGTERM
 and SIGHUP respectively. For example:
 
 ```
-kill -s <signal> $LABWC_PID
-killall -s <signal> labwc
+kill -s <signal> $LABWC_NEXT_PID
+killall -s <signal> labwc-next
 ```
 
-Each running instance of labwc sets the environment variable `LABWC_PID` to
+Each running instance of labwc sets the environment variable `LABWC_NEXT_PID` to
 its PID. This is useful for sending signals to a specific instance and is what
 the `--exit` and `--reconfigure` options use.
 
@@ -43,7 +43,7 @@ the `--exit` and `--reconfigure` options use.
 	VARIABLES* section below for further options.
 
 *-e, --exit*
-	Exit the compositor by sending SIGTERM to `$LABWC_PID`
+	Exit the compositor by sending SIGTERM to `$LABWC_NEXT_PID`
 
 *-h, --help*
 	Show help message and quit
@@ -52,7 +52,7 @@ the `--exit` and `--reconfigure` options use.
 	Merge user config/theme files in all XDG Base Directories
 
 *-r, --reconfigure*
-	Reload the compositor configuration by sending SIGHUP to `$LABWC_PID`
+	Reload the compositor configuration by sending SIGHUP to `$LABWC_NEXT_PID`
 
 *-s, --startup* <command>
 	Run command on startup
@@ -66,9 +66,17 @@ the `--exit` and `--reconfigure` options use.
 	Manager, or the Window Manager can be launched independently first. On
 	Wayland, the Compositor is both Display Server and Window Manager, so
 	the described session management mechanisms do not work because the
-	Compositor needs to be running before the session can function.  As some
+	Compositor needs to be running before the session can function. As some
 	session clients support both X11 and Wayland, this command line option
 	avoids re-writes and fragmentation.
+
+*-t, --title* <fmtstr>
+	Set the window title for labwc to use when it is running in a window
+	(i.e. nested in a compositor). <fmtstr> is a format string to be used as
+	the window title, replacing `%o` with the name of the output
+	region. This is useful when simulating multiple screens, such as with
+	running labwc with the environment variable `WLR_WL_OUTPUTS=2`. In this
+	case, `%o` will be unique per simulated screen.
 
 *-v, --version*
 	Show the version number and quit
@@ -99,7 +107,7 @@ XDG_CURRENT_DESKTOP
 XDG_SESSION_TYPE
 XCURSOR_SIZE
 XCURSOR_THEME
-LABWC_PID
+LABWC_NEXT_PID
 ```
 
 This behavior is enabled by default whenever labwc uses the "DRM" wlroots
@@ -118,6 +126,25 @@ this is accomplished by setting the session variables to empty strings. For
 systemd, the command `systemctl --user unset-environment` will be invoked to
 actually remove the variables from the activation environment.
 
+A systemd user unit named `labwc-next-session.target` is also shipped alongside
+the compositor for users who want to integrate labwc with systemd. It binds
+to the standard `graphical-session.target`, so systemd user services can
+start and stop in sync with the labwc session when they declare a WantedBy
+or PartOf relationship to that target. Labwc does not activate the target
+itself; users opt in by adding lines like the following to their
+*autostart* and *shutdown* files:
+
+```
+systemctl --user --no-block start labwc-next-session.target
+systemctl --user stop graphical-session.target
+```
+
+The example *autostart* and *shutdown* files shipped with labwc include
+these commented out. To have a user service automatically started with
+the session, enable it so the corresponding symlink under the
+graphical-session.target.wants directory exists, for example by running
+"systemctl --user enable dms.service".
+
 # ENVIRONMENT VARIABLES
 
 Set the environment variables listed below to enable specific debug options.
@@ -131,8 +158,8 @@ example: *LABWC_DEBUG_FOO=1 labwc*.
 	be shown with the *-V|--version* option.
 
 *LABWC_DEBUG_DIR_CONFIG_AND_THEME*
-	Increase logging of paths for config files (for example rc.xml,
-	autostart, environment and menu.xml) as well as titlebar buttons.
+	Increase logging of paths for config files (for example config.toml,
+	autostart, environment and menu.toml) as well as titlebar buttons.
 
 *LABWC_DEBUG_CONFIG_NODENAMES*
 	Enable logging of all nodenames (for example *policy.placement: Cascade*
@@ -145,4 +172,4 @@ example: *LABWC_DEBUG_FOO=1 labwc*.
 
 # SEE ALSO
 
-labwc-actions(5), labwc-config(5), labwc-menu(5), labwc-theme(5)
+labwc-next-actions(5), labwc-next-menu(5)

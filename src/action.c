@@ -14,6 +14,7 @@
 #include "common/macros.h"
 #include "common/list.h"
 #include "common/mem.h"
+#include "common/nag.h"
 #include "common/parse-bool.h"
 #include "common/spawn.h"
 #include "common/string-helpers.h"
@@ -21,12 +22,14 @@
 #include "cycle.h"
 #include "debug.h"
 #include "input/keyboard.h"
+#include "input/key-state.h"
 #include "labwc.h"
 #include "magnifier.h"
 #include "menu/menu.h"
 #include "output.h"
 #include "output-virtual.h"
 #include "regions.h"
+#include "show-desktop.h"
 #include "ssd.h"
 #include "theme.h"
 #include "translate.h"
@@ -82,6 +85,8 @@ struct action_arg_list {
 	X(SHRINK_TO_EDGE, "ShrinkToEdge") \
 	X(NEXT_WINDOW, "NextWindow") \
 	X(PREVIOUS_WINDOW, "PreviousWindow") \
+	X(NEXT_WINDOW_IMMEDIATE, "NextWindowImmediate") \
+	X(PREVIOUS_WINDOW_IMMEDIATE, "PreviousWindowImmediate") \
 	X(RECONFIGURE, "Reconfigure") \
 	X(SHOW_MENU, "ShowMenu") \
 	X(TOGGLE_MAXIMIZE, "ToggleMaximize") \
@@ -132,14 +137,16 @@ struct action_arg_list {
 	X(TOGGLE_MAGNIFY, "ToggleMagnify") \
 	X(ZOOM_IN, "ZoomIn") \
 	X(ZOOM_OUT, "ZoomOut") \
+	X(TOGGLE_SHOW_DESKTOP, "ToggleShowDesktop") \
 	X(WARP_CURSOR, "WarpCursor") \
-	X(HIDE_CURSOR, "HideCursor")
+	X(HIDE_CURSOR, "HideCursor") \
+	X(DEBUG_TOGGLE_KEY_STATE_INDICATOR, "DebugToggleKeyStateIndicator")
 
 /*
  * Will expand to:
  *
  * enum action_type {
- *	ACTION_TYPE_INVALID,
+ *	ACTION_TYPE_INVALID = 0,
  *	ACTION_TYPE_NONE,
  *	ACTION_TYPE_CLOSE,
  *	ACTION_TYPE_KILL,
@@ -333,13 +340,15 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 		break;
 	case ACTION_TYPE_NEXT_WINDOW:
 	case ACTION_TYPE_PREVIOUS_WINDOW:
+	case ACTION_TYPE_NEXT_WINDOW_IMMEDIATE:
+	case ACTION_TYPE_PREVIOUS_WINDOW_IMMEDIATE:
 		if (!strcasecmp(argument, "workspace")) {
 			if (!strcasecmp(content, "all")) {
 				action_arg_add_int(action, argument, CYCLE_WORKSPACE_ALL);
 			} else if (!strcasecmp(content, "current")) {
 				action_arg_add_int(action, argument, CYCLE_WORKSPACE_CURRENT);
 			} else {
-				wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
+				nag_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
 					action_names[action->type], argument, content);
 			}
 			goto cleanup;
@@ -352,7 +361,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 			} else if (!strcasecmp(content, "focused")) {
 				action_arg_add_int(action, argument, CYCLE_OUTPUT_FOCUSED);
 			} else {
-				wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
+				nag_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
 					action_names[action->type], argument, content);
 			}
 			goto cleanup;
@@ -363,7 +372,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 			} else if (!strcasecmp(content, "current")) {
 				action_arg_add_int(action, argument, CYCLE_APP_ID_CURRENT);
 			} else {
-				wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
+				nag_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
 					action_names[action->type], argument, content);
 			}
 			goto cleanup;
@@ -393,7 +402,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 		if (!strcmp(argument, "direction")) {
 			enum view_axis axis = view_axis_parse(content);
 			if (axis == VIEW_AXIS_NONE || axis == VIEW_AXIS_INVALID) {
-				wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
+				nag_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
 					action_names[action->type], argument, content);
 			} else {
 				action_arg_add_int(action, argument, axis);
@@ -407,7 +416,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 			if (mode != LAB_SSD_MODE_INVALID) {
 				action_arg_add_int(action, argument, mode);
 			} else {
-				wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
+				nag_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
 					action_names[action->type], argument, content);
 			}
 			goto cleanup;
@@ -422,7 +431,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 			enum lab_edge edge = lab_edge_parse(content,
 				/*tiled*/ true, /*any*/ false);
 			if (edge == LAB_EDGE_NONE || edge == LAB_EDGE_CENTER) {
-				wlr_log(WLR_ERROR,
+				nag_log(WLR_ERROR,
 					"Invalid argument for action %s: '%s' (%s)",
 					action_names[action->type], argument, content);
 			} else {
@@ -489,7 +498,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 			enum lab_edge edge = lab_edge_parse(content,
 				/*tiled*/ false, /*any*/ false);
 			if (edge == LAB_EDGE_NONE) {
-				wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
+				nag_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
 					action_names[action->type], argument, content);
 			} else {
 				action_arg_add_int(action, argument, edge);
@@ -513,7 +522,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 			enum lab_placement_policy policy =
 				view_placement_parse(content);
 			if (policy == LAB_PLACE_INVALID) {
-				wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
+				nag_log(WLR_ERROR, "Invalid argument for action %s: '%s' (%s)",
 						action_names[action->type], argument, content);
 			} else {
 				action_arg_add_int(action, argument, policy);
@@ -534,7 +543,7 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 		goto cleanup;
 	}
 
-	wlr_log(WLR_ERROR, "Invalid argument for action %s: '%s'",
+	nag_log(WLR_ERROR, "Invalid argument for action %s: '%s'",
 		action_names[action->type], argument);
 
 cleanup:
@@ -549,7 +558,7 @@ action_type_from_str(const char *action_name)
 			return i;
 		}
 	}
-	wlr_log(WLR_ERROR, "Invalid action: %s", action_name);
+	nag_log(WLR_ERROR, "Invalid action: %s", action_name);
 	return ACTION_TYPE_INVALID;
 }
 
@@ -557,7 +566,7 @@ struct action *
 action_create(const char *action_name)
 {
 	if (!action_name) {
-		wlr_log(WLR_ERROR, "action name not specified");
+		nag_log(WLR_ERROR, "action name not specified");
 		return NULL;
 	}
 
@@ -809,6 +818,15 @@ view_for_action(struct view *activator, struct action *action, struct cursor_con
 		return ctx->view;
 	}
 	default:
+		/*
+		 * While the window switcher is up, the active view is not the
+		 * one the user is looking at, so act on the view highlighted
+		 * in the OSD instead.
+		 */
+		if (server.input_mode == LAB_INPUT_STATE_CYCLE
+				&& server.cycle.selected_view) {
+			return server.cycle.selected_view;
+		}
 		return server.active_view;
 	}
 }
@@ -1142,6 +1160,21 @@ run_action(struct view *view, struct action *action,
 		}
 		break;
 	}
+	case ACTION_TYPE_NEXT_WINDOW_IMMEDIATE:
+	case ACTION_TYPE_PREVIOUS_WINDOW_IMMEDIATE: {
+		enum lab_cycle_dir dir = (action->type == ACTION_TYPE_NEXT_WINDOW_IMMEDIATE) ?
+			LAB_CYCLE_DIR_FORWARD : LAB_CYCLE_DIR_BACKWARD;
+		struct cycle_filter filter = {
+			.workspace = action_get_int(action, "workspace",
+				rc.window_switcher.workspace_filter),
+			.output = action_get_int(action, "output",
+				CYCLE_OUTPUT_ALL),
+			.app_id = action_get_int(action, "identifier",
+				CYCLE_APP_ID_ALL),
+		};
+		cycle_immediate(dir, filter);
+		break;
+	}
 	case ACTION_TYPE_RECONFIGURE:
 		kill(getpid(), SIGHUP);
 		break;
@@ -1289,7 +1322,7 @@ run_action(struct view *view, struct action *action,
 
 			/*
 			 * To support only setting one of width/height
-			 * in <action name="ResizeTo" width="" height=""/>
+			 * in <action name="ResizeTo" width="" height="" />
 			 * we fall back to current dimension when unset.
 			 */
 			struct wlr_box box = {
@@ -1560,6 +1593,9 @@ run_action(struct view *view, struct action *action,
 	case ACTION_TYPE_ZOOM_OUT:
 		magnifier_set_scale(MAGNIFY_DECREASE);
 		break;
+	case ACTION_TYPE_TOGGLE_SHOW_DESKTOP:
+		show_desktop_toggle();
+		break;
 	case ACTION_TYPE_WARP_CURSOR: {
 		const char *to = action_get_str(action, "to", "output");
 		const char *x = action_get_str(action, "x", "center");
@@ -1569,6 +1605,9 @@ run_action(struct view *view, struct action *action,
 	}
 	case ACTION_TYPE_HIDE_CURSOR:
 		cursor_set_visible(&server.seat, false);
+		break;
+	case ACTION_TYPE_DEBUG_TOGGLE_KEY_STATE_INDICATOR:
+		key_state_indicator_toggle();
 		break;
 	case ACTION_TYPE_INVALID:
 		wlr_log(WLR_ERROR, "Not executing unknown action");
@@ -1582,6 +1621,29 @@ run_action(struct view *view, struct action *action,
 		wlr_log(WLR_ERROR,
 			"Not executing invalid action (%u)"
 			" This is a BUG. Please report.", action->type);
+	}
+}
+
+/*
+ * Actions allowed to run while the window switcher is up. Anything which
+ * changes focus, opens a menu or starts an interactive move/resize would
+ * fight with the switcher's focus override, so keep this list short.
+ *
+ * Iconify is deliberately absent: view_minimize() refuses to run while
+ * input_mode is LAB_INPUT_STATE_CYCLE, so allowing it here would only
+ * produce a log message.
+ */
+static bool
+action_is_allowed_while_cycling(enum action_type type)
+{
+	switch (type) {
+	case ACTION_TYPE_NEXT_WINDOW:
+	case ACTION_TYPE_PREVIOUS_WINDOW:
+	case ACTION_TYPE_CLOSE:
+	case ACTION_TYPE_KILL:
+		return true;
+	default:
+		return false;
 	}
 }
 
@@ -1604,10 +1666,9 @@ actions_run(struct view *activator, struct wl_list *actions, struct cursor_conte
 	struct action *action;
 	wl_list_for_each(action, actions, link) {
 		if (server.input_mode == LAB_INPUT_STATE_CYCLE
-				&& action->type != ACTION_TYPE_NEXT_WINDOW
-				&& action->type != ACTION_TYPE_PREVIOUS_WINDOW) {
-			wlr_log(WLR_INFO, "Only NextWindow or PreviousWindow "
-				"actions are accepted while window switching.");
+				&& !action_is_allowed_while_cycling(action->type)) {
+			wlr_log(WLR_INFO, "Action %s is not accepted while "
+				"window switching.", action_names[action->type]);
 			continue;
 		}
 

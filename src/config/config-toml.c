@@ -12,11 +12,14 @@
 #include "common/font.h"
 #include "common/list.h"
 #include "common/mem.h"
+#include "common/nag.h"
+#include "config/libinput.h"
 #include "config/keybind.h"
 #include "config/mousebind.h"
 #include "config/rcxml.h"
 #include "config/toml-vars.h"
 #include "action.h"
+#include "regions.h"
 #include "view.h"
 #include "workspaces.h"
 
@@ -51,7 +54,7 @@ static bool
 toml_int(toml_datum_t tab, const char *key, int *out)
 {
 	toml_datum_t d = toml_seek(tab, key);
-	if (d.type != TOML_INT64) {
+	if (d.type != TOML_INT64 || d.u.int64 < INT32_MIN || d.u.int64 > INT32_MAX) {
 		return false;
 	}
 	*out = (int)d.u.int64;
@@ -163,8 +166,33 @@ parse_core(toml_datum_t root)
 	if (toml_str(sec, "prompt-command", &s)) {
 		xstrdup_replace(rc.prompt_command, s);
 	}
+	if (toml_bool(sec, "hdr", &b)) {
+		rc.target_render_depth = b ? LAB_RENDER_BIT_DEPTH_10 : LAB_RENDER_BIT_DEPTH_8;
+	}
+	if (toml_str(sec, "error-command", &s)) {
+		xstrdup_replace(rc.error_command, s);
+	}
 	if (toml_str(sec, "bell-command", &s)) {
 		xstrdup_replace(rc.bell_command, s);
+	}
+}
+
+static void
+parse_privileged_interfaces(toml_datum_t root)
+{
+	toml_datum_t allow = toml_seek(root, "privileged-interfaces.allow");
+	if (allow.type != TOML_ARRAY) {
+		return;
+	}
+	rc.allowed_interfaces = 0;
+	for (int i = 0; i < allow.u.arr.size; ++i) {
+		toml_datum_t name = allow.u.arr.elem[i];
+		uint32_t id = name.type == TOML_STRING
+			? parse_privileged_interface(name.u.s) : 0;
+		if (!id) {
+			nag_log(WLR_ERROR, "Invalid interface in privileged-interfaces.allow");
+		}
+		rc.allowed_interfaces |= id;
 	}
 }
 
@@ -211,6 +239,10 @@ parse_focus(toml_datum_t root)
 	}
 	if (toml_bool(sec, "raise-on-focus", &b)) {
 		rc.raise_on_focus = b;
+	}
+	toml_datum_t delay = toml_get(sec, "raise-on-focus-delay");
+	if (delay.type == TOML_INT64 && delay.u.int64 >= 0 && delay.u.int64 <= INT32_MAX) {
+		rc.raise_on_focus_delay_ms = delay.u.int64;
 	}
 }
 
@@ -557,11 +589,102 @@ parse_snapping(toml_datum_t root)
 		if (toml_bool(ov, "enabled", &b)) {
 			rc.snap_overlay_enabled = b;
 		}
+		if (toml_str(ov, "placement", &s)) {
+			if (!strcasecmp(s, "above")) {
+				rc.snap_overlay_on_top = true;
+			} else if (!strcasecmp(s, "below")) {
+				rc.snap_overlay_on_top = false;
+			}
+		}
 		if (toml_int(ov, "delay-inner", &i)) {
 			rc.snap_overlay_delay_inner = i;
 		}
 		if (toml_int(ov, "delay-outer", &i)) {
 			rc.snap_overlay_delay_outer = i;
+		}
+	}
+}
+
+static void
+parse_regions(toml_datum_t root)
+{
+	toml_datum_t regions = toml_get(root, "region");
+	if (regions.type != TOML_ARRAY) {
+		return;
+	}
+	for (int i = 0; i < regions.u.arr.size; ++i) {
+		toml_datum_t entry = regions.u.arr.elem[i];
+		const char *name;
+		struct wlr_box percent;
+		if (!toml_str(entry, "name", &name) || !*name
+				|| !toml_int(entry, "x", &percent.x)
+				|| !toml_int(entry, "y", &percent.y)
+				|| !toml_int(entry, "width", &percent.width)
+				|| !toml_int(entry, "height", &percent.height)) {
+			nag_log(WLR_ERROR, "A snapping region requires a name, x, y, width and height");
+			continue;
+		}
+		struct region *region = znew(*region);
+		region->name = xstrdup(name);
+		region->percentage = percent;
+		wl_list_append(&rc.regions, &region->link);
+	}
+}
+
+static void
+parse_libinput(toml_datum_t root)
+{
+	toml_datum_t devices = toml_get(root, "libinput");
+	if (devices.type != TOML_ARRAY) {
+		return;
+	}
+	static const char *const curves[] = {
+		[LIBINPUT_ACCEL_TYPE_FALLBACK] = "fallback-curve",
+		[LIBINPUT_ACCEL_TYPE_MOTION] = "motion-curve",
+		[LIBINPUT_ACCEL_TYPE_SCROLL] = "scroll-curve",
+	};
+	for (int i = 0; i < devices.u.arr.size; ++i) {
+		toml_datum_t entry = devices.u.arr.elem[i];
+		if (entry.type != TOML_TABLE) {
+			continue;
+		}
+		struct libinput_category *device = libinput_category_create();
+		const char *s;
+		if (toml_str(entry, "device", &s)) {
+			device->type = get_device_type(s);
+			if (device->type == LAB_LIBINPUT_DEVICE_NONE) {
+				device->name = xstrdup(s);
+			}
+		}
+		if (toml_str(entry, "accel-profile", &s)) {
+			if (!strcasecmp(s, "custom")) {
+				device->accel_profile = LIBINPUT_CONFIG_ACCEL_PROFILE_CUSTOM;
+			} else if (!strcasecmp(s, "flat")) {
+				device->accel_profile = LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT;
+			} else if (!strcasecmp(s, "adaptive")) {
+				device->accel_profile = LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
+			}
+		}
+		if (toml_str(entry, "clickfinger-button-map", &s)) {
+			if (!strcasecmp(s, "lrm")) {
+				device->clickfinger_button_map = LIBINPUT_CONFIG_CLICKFINGER_MAP_LRM;
+			} else if (!strcasecmp(s, "lmr")) {
+				device->clickfinger_button_map = LIBINPUT_CONFIG_CLICKFINGER_MAP_LMR;
+			}
+		}
+		for (int j = LIBINPUT_ACCEL_TYPE_FALLBACK; j <= LIBINPUT_ACCEL_TYPE_SCROLL; ++j) {
+			toml_datum_t curve = toml_get(entry, curves[j]);
+			if (curve.type == TOML_UNKNOWN) {
+				continue;
+			}
+			toml_datum_t step = toml_get(curve, "step");
+			double value = step.type == TOML_FP64 ? step.u.fp64
+				: step.type == TOML_INT64 ? (double)step.u.int64 : 0;
+			toml_datum_t points = toml_get(curve, "points");
+			if (!libinput_curve_parse(value, points.type == TOML_STRING ? points.u.s : NULL,
+					&device->accel_curves[j])) {
+				device->accel_curve_invalid = true;
+			}
 		}
 	}
 }
@@ -587,17 +710,18 @@ config_toml_read(void)
 	wl_list_for_each(p, &paths, link) {
 		toml_result_t result = toml_parse_file_ex(p->string);
 		if (!result.ok) {
-			wlr_log(WLR_ERROR, "toml parse error in %s: %s",
+			nag_log(WLR_ERROR, "toml parse error in %s: %s",
 				p->string, result.errmsg);
 			toml_free(result);
 			continue;
 		}
 
-		wlr_log(WLR_INFO, "read config file %s", p->string);
+		nag_log(WLR_INFO, "read config file %s", p->string);
 
 		toml_datum_t root = result.toptab;
 		vars_load(root);
 		parse_core(root);
+		parse_privileged_interfaces(root);
 		parse_placement(root);
 		parse_focus(root);
 		parse_theme(root);
@@ -606,6 +730,8 @@ config_toml_read(void)
 		parse_workspace(root);
 		parse_resistance(root);
 		parse_snapping(root);
+		parse_regions(root);
+		parse_libinput(root);
 
 		toml_free(result);
 		found = true;

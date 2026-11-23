@@ -590,15 +590,13 @@ handle_set_class(struct wl_listener *listener, void *data)
 	struct view *view = &xwayland_view->base;
 
 	/*
-	 * Use the WM_CLASS 'instance' (1st string) for the app_id. Per
-	 * ICCCM, this is usually "the trailing part of the name used to
-	 * invoke the program (argv[0] stripped of any directory names)".
-	 *
-	 * In most cases, the 'class' (2nd string) is the same as the
-	 * 'instance' except for being capitalized. We want lowercase
-	 * here since we use the app_id for icon lookups.
+	 * Use the WM_CLASS 'class' (2nd string) for the app_id. (Note
+	 * that this is often capitalized, which must be accounted for
+	 * in icon lookups.) We used to use the 'instance' (1st string)
+	 * but this caused missing icons with Firefox, which has an
+	 * instance of 'Navigator' for historical reasons.
 	 */
-	view_set_app_id(view, xwayland_view->xwayland_surface->instance);
+	view_set_app_id(view, xwayland_view->xwayland_surface->class);
 }
 
 static void
@@ -753,16 +751,14 @@ static void
 set_surface(struct view *view, struct wlr_surface *surface)
 {
 	if (view->surface) {
-		/* Disconnect wlr_surface event listeners */
+		/* Disconnect mappable wlr_surface event listeners. */
 		mappable_disconnect(&view->mappable);
-		wl_list_remove(&view->commit.link);
 	}
 	view->surface = surface;
 	if (surface) {
-		/* Connect wlr_surface event listeners */
+		/* Connect mappable wlr_surface event listeners. */
 		mappable_connect(&view->mappable, surface,
 			handle_map, handle_unmap);
-		CONNECT_SIGNAL(surface, view, commit);
 	}
 }
 
@@ -783,6 +779,15 @@ handle_map(struct wl_listener *listener, void *data)
 		view->content_tree = wlr_scene_subsurface_tree_create(
 			view->scene_tree, view->surface);
 		die_if_null(view->content_tree);
+		wlr_scene_subsurface_tree_create(&view->capture.scene->tree, view->surface);
+		/*
+		 * Connect our commit signal after wlr_scene_surface
+		 * is created and its signals connected by the function
+		 * *wlr_scene_subsurface_tree_create()* above, so when we
+		 * receive it, we have the updated surface dimensions.
+		 * See issue #3711.
+		 */
+		CONNECT_SIGNAL(view->surface, view, commit);
 	}
 
 	wlr_scene_node_set_enabled(&view->content_tree->node, !view->shaded);
@@ -843,6 +848,7 @@ handle_unmap(struct wl_listener *listener, void *data)
 	 * concern of a dangling pointer in view->content_tree.
 	 */
 	if (view->content_tree) {
+		wl_list_remove(&view->commit.link);
 		wlr_scene_node_destroy(&view->content_tree->node);
 		view->content_tree = NULL;
 	}

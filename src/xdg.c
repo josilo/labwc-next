@@ -30,6 +30,8 @@
 #define LAB_XDG_SHELL_VERSION 6
 #define CONFIGURE_TIMEOUT_MS 100
 
+static struct view *xdg_toplevel_view_get_root(struct view *view);
+
 static struct xdg_toplevel_view *
 xdg_toplevel_view_from_view(struct view *view)
 {
@@ -121,7 +123,7 @@ set_fullscreen_from_request(struct view *view,
 	view_set_fullscreen(view, requested->fullscreen);
 }
 
-/* Called from commit handler and updates view->pending.x/y directly */
+/* Called from map/commit handler and updates view->pending.x/y directly */
 static void
 set_initial_position(struct view *view)
 {
@@ -263,11 +265,10 @@ handle_commit(struct wl_listener *listener, void *data)
 	bool update_required = false;
 
 	/*
-	 * The pending size will be empty in two cases:
-	 *   (1) when the view is first mapped
-	 *   (2) when leaving fullscreen or un-maximizing, if the view
-	 *       was initially fullscreen/maximized and the natural
-	 *       geometry isn't known yet
+	 * If we didn't know the natural size when leaving fullscreen or
+	 * unmaximizing, then the pending size will be 0x0. In this case,
+	 * the pending x/y is also unset and we still need to position
+	 * the window.
 	 */
 	if (wlr_box_empty(&view->pending) && !wlr_box_empty(&size)) {
 		view->pending.width = size.width;
@@ -463,6 +464,7 @@ handle_destroy(struct wl_listener *listener, void *data)
 	/* Remove xdg-shell view specific listeners */
 	wl_list_remove(&xdg_toplevel_view->set_app_id.link);
 	wl_list_remove(&xdg_toplevel_view->request_show_window_menu.link);
+	wl_list_remove(&xdg_toplevel_view->set_parent.link);
 	wl_list_remove(&xdg_toplevel_view->new_popup.link);
 	wl_list_remove(&view->commit.link);
 
@@ -567,6 +569,23 @@ handle_request_show_window_menu(struct wl_listener *listener, void *data)
 }
 
 static void
+handle_set_parent(struct wl_listener *listener, void *data)
+{
+	struct xdg_toplevel_view *xdg_toplevel_view = wl_container_of(
+		listener, xdg_toplevel_view, set_parent);
+	struct view *view = &xdg_toplevel_view->base;
+	struct view *view_root = xdg_toplevel_view_get_root(view);
+	if (view_root == view) {
+		return;
+	}
+	struct wlr_scene_node *node, *tmp;
+	wl_list_for_each_safe(node, tmp, &view->capture.scene->tree.children, link) {
+		wlr_log(WLR_DEBUG, "moving capture scene node to view_root");
+		wlr_scene_node_reparent(node, &view_root->capture.scene->tree);
+	}
+}
+
+static void
 handle_set_title(struct wl_listener *listener, void *data)
 {
 	struct view *view = wl_container_of(listener, view, set_title);
@@ -594,24 +613,44 @@ xdg_toplevel_view_configure(struct view *view, struct wlr_box geo)
 	struct wlr_xdg_toplevel *toplevel = xdg_toplevel_from_view(view);
 
 	/*
-	 * We do not need to send a configure request unless the size
-	 * changed (wayland has no notion of a global position). If the
-	 * size is the same (and there is no pending configure request)
-	 * then we can just move the view directly.
+	 * We do not need to send a configure request unless the size changed
+	 * (wayland has no notion of a global position). If the size is the same
+	 * (and there is no pending configure request) then we can just move the
+	 * view directly.
 	 */
 	if (geo.width != view->pending.width
 			|| geo.height != view->pending.height) {
 		if (toplevel->base->initialized) {
-			serial = wlr_xdg_toplevel_set_size(toplevel, geo.width, geo.height);
+			/*
+			 * geo.{width,height} are checked here to guard against
+			 * an odd edge-case reported in #3608 which involves TTY
+			 * switching between labwc and Xfce running on X.Org on
+			 * another TTY. It is not yet clear what causes this,
+			 * but hitting wlroots assert() is not great, so let's
+			 * protect against it.
+			 *
+			 * Ref:
+			 * - https://github.com/labwc/labwc/issues/3608
+			 * - https://github.com/labwc/labwc/issues/3750
+			 */
+			if (geo.width >= 0 && geo.height >= 0) {
+				serial = wlr_xdg_toplevel_set_size(toplevel,
+						geo.width, geo.height);
+			} else {
+				wlr_log(WLR_ERROR, "cannot set size %dx%d",
+					geo.width, geo.height);
+			}
 		} else {
 			/*
-			 * This may happen, for example, when a panel resizes because a
-			 * foreign-toplevel has been destroyed. This would then trigger
-			 * a call to desktop_arrange_all_views() which in turn explicitly
-			 * also tries to configure unmapped surfaces. This is fine when
-			 * trying to resize surfaces before they are mapped but it will
-			 * also try to resize surfaces which have been unmapped but their
-			 * associated struct view has not been destroyed yet.
+			 * This may happen, for example, when a panel resizes
+			 * because a foreign-toplevel has been destroyed. This
+			 * would then trigger a call to
+			 * desktop_arrange_all_views() which in turn explicitly
+			 * also tries to configure unmapped surfaces. This is
+			 * fine when trying to resize surfaces before they are
+			 * mapped but it will also try to resize surfaces which
+			 * have been unmapped but their associated struct view
+			 * has not been destroyed yet.
 			 */
 			wlr_log(WLR_DEBUG, "Preventing configure of uninitialized surface");
 		}
@@ -821,6 +860,29 @@ handle_map(struct wl_listener *listener, void *data)
 		} else {
 			view_set_ssd_mode(view, LAB_SSD_MODE_NONE);
 		}
+
+		/*
+		 * Set initial "pending" dimensions. "Current"
+		 * dimensions remain zero until handle_commit().
+		 * Note: this must be done before view_impl_map()
+		 * for window rules to work correctly.
+		 */
+		if (wlr_box_empty(&view->pending)) {
+			struct wlr_xdg_surface *xdg_surface =
+				xdg_surface_from_view(view);
+			view->pending.width = xdg_surface->geometry.width;
+			view->pending.height = xdg_surface->geometry.height;
+			set_initial_position(view);
+		}
+
+		/*
+		 * Set initial "current" position directly before
+		 * calling view_moved() to reduce flicker
+		 */
+		view->current.x = view->pending.x;
+		view->current.y = view->pending.y;
+
+		view_moved(view);
 	}
 
 	view_impl_map(view);
@@ -1024,6 +1086,9 @@ handle_new_xdg_toplevel(struct wl_listener *listener, void *data)
 	mappable_connect(&view->mappable, xdg_surface->surface,
 		handle_map, handle_unmap);
 
+	struct view *root_view = xdg_toplevel_view_get_root(view);
+	wlr_scene_xdg_surface_create(&root_view->capture.scene->tree, xdg_surface);
+
 	struct wlr_xdg_toplevel *toplevel = xdg_surface->toplevel;
 	CONNECT_SIGNAL(toplevel, view, destroy);
 	CONNECT_SIGNAL(toplevel, view, request_move);
@@ -1037,6 +1102,7 @@ handle_new_xdg_toplevel(struct wl_listener *listener, void *data)
 	/* Events specific to XDG toplevel views */
 	CONNECT_SIGNAL(toplevel, xdg_toplevel_view, set_app_id);
 	CONNECT_SIGNAL(toplevel, xdg_toplevel_view, request_show_window_menu);
+	CONNECT_SIGNAL(toplevel, xdg_toplevel_view, set_parent);
 	CONNECT_SIGNAL(xdg_surface, xdg_toplevel_view, new_popup);
 
 	wl_list_insert(&server.views, &view->link);

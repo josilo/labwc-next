@@ -2,10 +2,11 @@ scdoc = find_program('scdoc', required: get_option('man-pages'))
 
 if scdoc.found()
   manpages = [
-    'labwc.1',
-    'labwc-actions.5',
-    'labwc-menu.5',
-    'labnag.1',
+    'labwc-next.1',
+    'labwc-next-actions.5',
+    'labwc-next-menu.5',
+    'labwc-next-philosophy.7',
+    'labwc-next-nag.1',
   ]
   foreach manpage : manpages
     markdown = manpage + '.scd'

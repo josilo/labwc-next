@@ -15,6 +15,7 @@
 #include "common/list.h"
 #include "common/macros.h"
 #include "common/mem.h"
+#include "common/nag.h"
 #include "common/parse-bool.h"
 #include "common/parse-double.h"
 #include "common/string-helpers.h"
@@ -37,6 +38,43 @@
 
 static void load_default_key_bindings(void);
 static void load_default_mouse_bindings(void);
+
+uint32_t
+parse_privileged_interface(const char *name)
+{
+	static const char * const ifaces[] = {
+		"wp_drm_lease_device_v1",
+		"zwlr_gamma_control_manager_v1",
+		"zwlr_output_manager_v1",
+		"zwlr_output_power_manager_v1",
+		"zwp_input_method_manager_v2",
+		"zwlr_virtual_pointer_manager_v1",
+		"zwp_virtual_keyboard_manager_v1",
+		"zwlr_export_dmabuf_manager_v1",
+		"zwlr_screencopy_manager_v1",
+		"ext_data_control_manager_v1",
+		"zwlr_data_control_manager_v1",
+		"wp_security_context_manager_v1",
+		"ext_idle_notifier_v1",
+		"zwlr_foreign_toplevel_manager_v1",
+		"ext_foreign_toplevel_list_v1",
+		"ext_session_lock_manager_v1",
+		"zwlr_layer_shell_v1",
+		"ext_workspace_manager_v1",
+		"ext_image_copy_capture_manager_v1",
+		"ext_output_image_capture_source_manager_v1",
+	};
+
+	static_assert(ARRAY_SIZE(ifaces) <= 32,
+		"return type too small for amount of privileged protocols");
+
+	for (size_t i = 0; i < ARRAY_SIZE(ifaces); i++) {
+		if (!strcmp(name, ifaces[i])) {
+			return UINT32_C(1) << i;
+		}
+	}
+	return 0;
+}
 
 static void
 fill_section(const char *content, enum lab_node_type *buttons, int *count,
@@ -175,6 +213,8 @@ rcxml_init(void)
 	rc.gap = 0;
 	rc.adaptive_sync = LAB_ADAPTIVE_SYNC_DISABLED;
 	rc.allow_tearing = LAB_TEARING_DISABLED;
+	rc.target_render_depth = LAB_RENDER_BIT_DEPTH_DEFAULT;
+	rc.allowed_interfaces = UINT32_MAX;
 	rc.auto_enable_outputs = true;
 	rc.reuse_output_mode = false;
 	rc.xwayland_persistence = false;
@@ -189,6 +229,7 @@ rcxml_init(void)
 	rc.focus_follow_mouse = false;
 	rc.focus_follow_mouse_requires_movement = true;
 	rc.raise_on_focus = false;
+	rc.raise_on_focus_delay_ms = 0;
 
 	rc.doubleclick_time = 500;
 
@@ -215,6 +256,7 @@ rcxml_init(void)
 	rc.snap_edge_range_outer = 10;
 	rc.snap_edge_corner_range = 50;
 	rc.snap_overlay_enabled = true;
+	rc.snap_overlay_on_top = false;
 	rc.snap_overlay_delay_inner = 500;
 	rc.snap_overlay_delay_outer = 500;
 	rc.snap_top_maximize = true;
@@ -426,7 +468,7 @@ post_processing(void)
 
 	if (!rc.prompt_command) {
 		rc.prompt_command =
-			xstrdup("labnag "
+			xstrdup("labwc-next-nag "
 				"--message '%m' "
 				"--button-dismiss '%n' "
 				"--button-dismiss '%y' "
@@ -441,6 +483,15 @@ post_processing(void)
 				"--keyboard-focus on-demand "
 				"--layer overlay "
 				"--timeout 0");
+	}
+	if (!rc.error_command) {
+		rc.error_command =
+			xstrdup("labwc-next-nag "
+				"--message 'Config errors detected' "
+				"--button-dismiss 'Close' "
+				"--layer overlay "
+				"--timeout 0 "
+				"--detailed-message");
 	}
 	if (!rc.fallback_app_icon_name) {
 		rc.fallback_app_icon_name = xstrdup("labwc-next");
@@ -639,6 +690,7 @@ rcxml_finish(void)
 	zfree(rc.font_menuitem.name);
 	zfree(rc.font_osd.name);
 	zfree(rc.prompt_command);
+	zfree(rc.error_command);
 	zfree(rc.bell_command);
 	zfree(rc.theme_name);
 	zfree(rc.icon_theme_name);

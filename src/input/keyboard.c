@@ -139,6 +139,8 @@ handle_modifiers(struct wl_listener *listener, void *data)
 	struct seat *seat = keyboard->base.seat;
 	struct wlr_keyboard *wlr_keyboard = keyboard->wlr_keyboard;
 
+	key_state_indicator_update(seat);
+
 	if (server.input_mode == LAB_INPUT_STATE_MOVE) {
 		/* Any change to the modifier state re-enable region snap */
 		seat->region_prevent_snap = false;
@@ -201,8 +203,10 @@ match_keybinding_for_sym(uint32_t modifiers,
 		if (modifiers ^ keybind->modifiers) {
 			continue;
 		}
-		if (view_inhibits_actions(server.active_view, &keybind->actions)) {
-			continue;
+		if (!(keybind->override_inhibition)) {
+			if (view_inhibits_actions(server.active_view, &keybind->actions)) {
+				continue;
+			}
 		}
 		if (sym == XKB_KEY_NoSymbol) {
 			/* Use keycodes */
@@ -440,15 +444,23 @@ handle_menu_keys(struct keysyms *syms)
 			break;
 		case XKB_KEY_Return:
 		case XKB_KEY_KP_Enter:
-			menu_call_selected_actions();
+			if (!menu_call_selected_actions()) {
+				menu_submenu_enter();
+			};
 			break;
 		case XKB_KEY_Escape:
+		case XKB_KEY_Super_L:
 			menu_close_root();
 			cursor_update_focus();
 			break;
-		default:
-			continue;
-		}
+		default: {
+			uint32_t accelerator = xkb_keysym_to_utf32(syms->syms[i]);
+			if (accelerator == 0) {
+				continue;
+			}
+			menu_process_accelerator(accelerator);
+			break;
+		}}
 		break;
 	}
 }
@@ -622,6 +634,9 @@ handle_key(struct wl_listener *listener, void *data)
 	struct seat *seat = keyboard->base.seat;
 	struct wlr_keyboard_key_event *event = data;
 	struct wlr_seat *wlr_seat = seat->wlr_seat;
+
+	key_state_indicator_update(seat);
+
 	idle_manager_notify_activity(seat->wlr_seat);
 
 	/* any new press/release cancels current keybind repeat */
@@ -751,17 +766,12 @@ set_layout(struct wlr_keyboard *kb)
 	static bool fallback_mode;
 
 	struct xkb_rule_names rules = { 0 };
-	enum xkb_context_flags ctx_flags = XKB_CONTEXT_NO_FLAGS;
-#ifdef __ANDROID__
 	/*
-	 * Android's bionic libc implements secure_getenv() as a function
-	 * that always returns NULL (the app process has no AT_SECURE).
-	 * This prevents xkbcommon from reading XKB_DEFAULT_LAYOUT and
-	 * friends via secure_getenv(). Use the flag to fall back to
-	 * regular getenv() which works fine on Android.
+	 * Allow libxkbcommon to read XKB_* env vars even if running with elevated
+	 * privleges (mostly a non-empty permitted capability set or when on Android).
+	 * Internally this causes it to use getenv() rather than secure_getenv().
 	 */
-	ctx_flags |= XKB_CONTEXT_NO_SECURE_GETENV;
-#endif
+	enum xkb_context_flags ctx_flags = XKB_CONTEXT_NO_SECURE_GETENV;
 	struct xkb_context *context = xkb_context_new(ctx_flags);
 	struct xkb_keymap *keymap = xkb_map_new_from_names(context, &rules,
 		XKB_KEYMAP_COMPILE_NO_FLAGS);

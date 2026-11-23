@@ -5,13 +5,13 @@
 : ${LABWC_EXPECT_RETURNCODE:=0}
 : ${LABWC_VERBOSE:=0}
 
-if ! test -x "$1/labwc"; then
-	echo "$1/labwc not found"
+if ! test -x "$1/labwc-next"; then
+	echo "$1/labwc-next not found"
 	exit 1
 fi
 
 args=(
-	"$1/labwc"
+	"$1/labwc-next"
 	-C scripts/ci
 	-d
 )

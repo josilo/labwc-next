@@ -4,9 +4,12 @@
 #include <pango/pangocairo.h>
 #include <signal.h>
 #include <unistd.h>
+#include <wlr/version.h>
 #include "common/fd-util.h"
 #include "common/font.h"
+#include "common/macros.h"
 #include "common/spawn.h"
+#include "common/string-helpers.h"
 #include "config/rcxml.h"
 #include "config/session.h"
 #include "labwc.h"
@@ -35,13 +38,14 @@ static const struct option long_options[] = {
 	{"reconfigure", no_argument, NULL, 'r'},
 	{"startup", required_argument, NULL, 's'},
 	{"session", required_argument, NULL, 'S'},
+	{"title", required_argument, NULL, 't'},
 	{"version", no_argument, NULL, 'v'},
 	{"verbose", no_argument, NULL, 'V'},
 	{0, 0, 0, 0}
 };
 
 static const char labwc_usage[] =
-"Usage: labwc [options...]\n"
+"Usage: labwc-next [options...]\n"
 "  -c, --config <file>      Specify config file (with path)\n"
 "  -C, --config-dir <dir>   Specify config directory\n"
 "  -d, --debug              Enable full logging, including debug information\n"
@@ -51,6 +55,7 @@ static const char labwc_usage[] =
 "  -r, --reconfigure        Reload the compositor configuration\n"
 "  -s, --startup <command>  Run command on startup\n"
 "  -S, --session <command>  Run command on startup and terminate on exit\n"
+"  -t, --title <fmtstr>     Specify title to use when running in a window\n"
 "  -v, --version            Show version number and quit\n"
 "  -V, --verbose            Enable more verbose logging\n";
 
@@ -65,12 +70,15 @@ static void
 print_version(void)
 {
 	#define FEATURE_ENABLED(feature) (HAVE_##feature ? "+" : "-")
-	printf("labwc %s (%sxwayland %snls %srsvg %slibsfdo)\n",
+	printf("labwc-next %s (%sxwayland %snls %srsvg %slibsfdo) wlroots-%d.%d.%d\n",
 		LABWC_VERSION,
 		FEATURE_ENABLED(XWAYLAND),
 		FEATURE_ENABLED(NLS),
 		FEATURE_ENABLED(RSVG),
-		FEATURE_ENABLED(LIBSFDO)
+		FEATURE_ENABLED(LIBSFDO),
+		wlr_version_get_major(),
+		wlr_version_get_minor(),
+		wlr_version_get_micro()
 	);
 	#undef FEATURE_ENABLED
 }
@@ -116,9 +124,9 @@ die_on_no_fonts(void)
 static void
 send_signal_to_labwc_pid(int signal)
 {
-	char *labwc_pid = getenv("LABWC_PID");
+	char *labwc_pid = getenv("LABWC_NEXT_PID");
 	if (!labwc_pid) {
-		wlr_log(WLR_ERROR, "LABWC_PID not set");
+		wlr_log(WLR_ERROR, "LABWC_NEXT_PID not set");
 		exit(EXIT_FAILURE);
 	}
 	int pid = atoi(labwc_pid);
@@ -164,10 +172,16 @@ main(int argc, char *argv[])
 	char *primary_client = NULL;
 	enum wlr_log_importance verbosity = WLR_ERROR;
 
+	server.wlr_version = _LAB_CALC_WLR_VERSION_NUM(
+		wlr_version_get_major(),
+		wlr_version_get_minor(),
+		wlr_version_get_micro()
+	);
+
 	int c;
 	while (1) {
 		int index = 0;
-		c = getopt_long(argc, argv, "c:C:dehmrs:S:vV", long_options, &index);
+		c = getopt_long(argc, argv, "c:C:dehmrs:S:t:vV", long_options, &index);
 		if (c == -1) {
 			break;
 		}
@@ -195,6 +209,9 @@ main(int argc, char *argv[])
 			break;
 		case 'S':
 			primary_client = optarg;
+			break;
+		case 't':
+			server.title_fmt = optarg;
 			break;
 		case 'v':
 			print_version();
@@ -228,23 +245,23 @@ main(int argc, char *argv[])
 	rcxml_read(rc.config_file);
 
 	/*
-	 * Set environment variable LABWC_PID to the pid of the compositor
+	 * Set environment variable LABWC_NEXT_PID to the pid of the compositor
 	 * so that SIGHUP and SIGTERM can be sent to specific instances using
 	 * `kill -s <signal> <pid>` rather than `killall -s <signal> labwc`
 	 */
 	char pid[32];
 	snprintf(pid, sizeof(pid), "%d", getpid());
-	if (setenv("LABWC_PID", pid, true) < 0) {
-		wlr_log_errno(WLR_ERROR, "unable to set LABWC_PID");
+	if (setenv("LABWC_NEXT_PID", pid, true) < 0) {
+		wlr_log_errno(WLR_ERROR, "unable to set LABWC_NEXT_PID");
 	} else {
-		wlr_log(WLR_DEBUG, "LABWC_PID=%s", pid);
+		wlr_log(WLR_DEBUG, "LABWC_NEXT_PID=%s", pid);
 	}
 
 	/* useful for helper programs */
-	if (setenv("LABWC_VER", LABWC_VERSION, true) < 0) {
-		wlr_log_errno(WLR_ERROR, "unable to set LABWC_VER");
+	if (setenv("LABWC_NEXT_VER", LABWC_VERSION, true) < 0) {
+		wlr_log_errno(WLR_ERROR, "unable to set LABWC_NEXT_VER");
 	} else {
-		wlr_log(WLR_DEBUG, "LABWC_VER=%s", LABWC_VERSION);
+		wlr_log(WLR_DEBUG, "LABWC_NEXT_VER=%s", LABWC_VERSION);
 	}
 
 	if (!getenv("XDG_RUNTIME_DIR")) {
@@ -253,6 +270,10 @@ main(int argc, char *argv[])
 	}
 
 	increase_nofile_limit();
+
+	if (string_null_or_empty(server.title_fmt)) {
+		server.title_fmt = "labwc-next - %o";
+	}
 
 	server_init();
 	server_start();

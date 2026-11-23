@@ -65,7 +65,7 @@ Default key bindings:
 | ------------------------ | ------
 | `alt`-`tab`              | activate next window
 | `alt`-`shift`-`tab`      | activate previous window
-| `super`-`return`         | lab-sensible-terminal
+| `super`-`return`         | labwc-next-sensible-terminal
 | `alt`-`F4`               | close window
 | `super`-`a`              | toggle maximize
 | `super`-`mouse-left`     | move window

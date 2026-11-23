@@ -22,6 +22,7 @@
 #include "ipc.h"
 #include "labwc.h"
 #include "output.h"
+#include "show-desktop.h"
 #include "theme.h"
 #include "view.h"
 
@@ -115,7 +116,7 @@ _osd_update(void)
 		if (!hide_boxes) {
 			x = (width - marker_width) / 2;
 			wl_list_for_each(workspace, &server.workspaces.all, link) {
-				bool active =  workspace == server.workspaces.current;
+				bool active = workspace == server.workspaces.current;
 				set_cairo_color(cairo, rc.theme->osd_label_text_color);
 				struct wlr_fbox fbox = {
 					.x = x,
@@ -496,6 +497,8 @@ workspaces_switch_to(struct workspace *target, bool update_focus)
 	desktop_update_top_layer_visibility();
 
 	wlr_ext_workspace_handle_v1_set_active(target->ext_workspace, true);
+
+	show_desktop_reset();
 	ipc_broadcast_workspace(target->name);
 }
 

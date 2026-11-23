@@ -1,2 +1,5 @@
 /*
 !/*.wrap
+!/packagefiles/
+/packagefiles/*
+!/packagefiles/tomlc17/

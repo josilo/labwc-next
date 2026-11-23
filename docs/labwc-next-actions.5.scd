@@ -1,4 +1,4 @@
-labwc-actions(5)
+labwc-next-actions(5)
 
 # NAME
 
@@ -16,7 +16,7 @@ Actions are used in menus and keyboard/mouse bindings.
 	SIGTERM signal.
 
 *<action name="Execute" command="value" />*
-	Execute command.  Note that in the interest of backward compatibility,
+	Execute command. Note that in the interest of backward compatibility,
 	labwc supports <execute> as an alternative to <command> even though
 	openbox documentation states that it is deprecated.
 	Note: Tilde (~) is expanded in the command before passing to execvp().
@@ -63,6 +63,10 @@ Actions are used in menus and keyboard/mouse bindings.
 	top or bottom tell how much to resize on that edge of window,
 	positive values grow window, negative shrink window.
 
+	Note that some applications like terminal emulators may refuse growing
+	or shrinking by small amounts to keep the window size aligned to their
+	internal cell size.
+
 *<action name="GrowToEdge" direction="value" />*
 	Resize window to fill the space between its edge and any other
 	window edge.
@@ -90,7 +94,7 @@ Actions are used in menus and keyboard/mouse bindings.
 	This action is deprecated from v0.7.3. To ensure your config works in
 	future labwc releases, please use:
 
-	*<action name="AutoPlace" policy="cursor">*
+	*<action name="AutoPlace" policy="cursor" />*
 
 *<action name="MoveRelative" x="" y="" />*
 	Move window relative to its current position. Positive value of x moves
@@ -119,37 +123,45 @@ Actions are used in menus and keyboard/mouse bindings.
 	ToggleSnapToRegion additionally toggles the active window between
 	tiled to the given region and its untiled position.
 
-	See labwc-config(5) for further information on how to define regions.
+	See the example config.toml for further information on how to define regions.
 
 *<action name="UnSnap" />*
 	Resize and move the active window back to its untiled or unmaximized
 	position if it had been maximized or tiled to a direction or region.
 
 *<action name="NextWindow" workspace="current" output="all" identifier="all" />*++
-*<action name="PreviousWindow" workspace="current" output="all" identifier="all" />*
+*<action name="PreviousWindow" workspace="current" output="all" identifier="all" />*++
+*<action name="NextWindowImmediate" workspace="current" output="all" identifier="all" />*++
+*<action name="PreviousWindowImmediate" workspace="current" output="all" identifier="all" />*++
 	Cycle focus to next/previous window, respectively.
 
 	Default keybinds for NextWindow and PreviousWindow are Alt-Tab and
 	Shift-Alt-Tab. While cycling through windows, the arrow keys move the
 	selected window forwards/backwards and the escape key halts the cycling.
 
+	Other actions are ignored while the Window Switcher is up, except for
+	Close and Kill, which act on the window selected in the OSD rather than
+	the still-focused one.
+
+	NextWindowImmediate and PreviousWindowImmediate skip the Window Switcher
+	and OSD, useful for binding to keys without modifiers.
+
 	*workspace* [all|current]
-	This determines whether to cycle through windows on all workspaces or the
-	current workspace. Default is "current".
+	This determines whether to cycle through windows on all workspaces or
+	the current workspace. Default is "current".
 
 	*output* [all|focused|cursor]
-	This determines whether to cycle through windows on all outputs, the focused
-	output, or the output under the cursor. Default is "all".
+	This determines whether to cycle through windows on all outputs, the
+	focused output, or the output under the cursor. Default is "all".
 
 	*identifier* [all|current]
-	This determines whether to cycle through all windows or only windows of the
-	same application as the currently focused window. Default is "all".
+	This determines whether to cycle through all windows or only windows of
+	the same application as the currently focused window. Default is "all".
 
 *<action name="Reconfigure" />*
 	Re-load configuration and theme files.
 
-*<action name="ShowMenu" menu="root-menu"/>*
-
+*<action name="ShowMenu" menu="root-menu" />*
 	Show a menu.
 
 ```
@@ -165,7 +177,7 @@ Actions are used in menus and keyboard/mouse bindings.
 	*menu* The name of the menu to show. The menus "root-menu",
 	"client-menu", "client-send-to-menu" and "client-list-combined-menu"
 	are guaranteed to exist, but others may be defined explicitly.
-	See labwc-menu(5) for more information.
+	See labwc-next-menu(5) for more information.
 
 	*atCursor* [yes|no] When opening a menu, open the menu at the location
 	of the mouse cursor. When set to no, the menu will appear at the
@@ -295,7 +307,7 @@ Actions are used in menus and keyboard/mouse bindings.
 	(if one exists).
 
 	*wrap* [yes|no] When using the direction attribute, wrap around from
-	right-to-left or top-to-bottom, and vice versa. Default no.
+	right-to-left or top-to-bottom, and vice versa. Default is no.
 
 *<action name="FitToOutput" />*
 	Resizes active window size to width and height of the output when the
@@ -306,13 +318,13 @@ Actions are used in menus and keyboard/mouse bindings.
 
 	*to* The workspace to switch to. Supported values are "current", "last",
 	"left", "right", "left-occupied", "right-occupied" or the full name of a
-	workspace or its index (starting at 1) as configured in rc.xml.
+	workspace or its index (starting at 1) as configured in TOML.
 
 	*wrap* [yes|no] Wrap around from last desktop to first, and vice
-	versa. Default yes.
+	versa. Default is yes.
 
 	*toggle* [yes|no] Toggle to “last” if already on the workspace that
-	would be the actual destination. Default no.
+	would be the actual destination. Default is no.
 
 *<action name="SendToDesktop" to="value" follow="yes" wrap="yes" />*
 	Send active window to workspace.
@@ -320,10 +332,11 @@ Actions are used in menus and keyboard/mouse bindings.
 	*to* The workspace to send the window to. Supported values are the same
 	as for GoToDesktop.
 
-	*follow* [yes|no] Also switch to the specified workspace. Default yes.
+	*follow* [yes|no] Also switch to the specified workspace.
+	Default is yes.
 
 	*wrap* [yes|no] Wrap around from last desktop to first, and vice
-	versa. Default yes.
+	versa. Default is yes.
 
 *<action name="VirtualOutputAdd" output_name="value" />*
 	Add virtual output (headless backend).
@@ -341,11 +354,11 @@ Actions are used in menus and keyboard/mouse bindings.
 
 ```
 <keybind key="W-v">
-  <action name="VirtualOutputAdd" output_name="ScreenCasting"/>
-  <action name="Execute" command='sh -c "wlr-randr --output ScreenCasting --pos 0,0 --scale 2 --custom-mode 3840x2110; wlr-randr --output eDP-1 --pos 0,0 --scale 2 --mode 3840x2160"'/>
+  <action name="VirtualOutputAdd" output_name="ScreenCasting" />
+  <action name="Execute" command='sh -c "wlr-randr --output ScreenCasting --pos 0,0 --scale 2 --custom-mode 3840x2110; wlr-randr --output eDP-1 --pos 0,0 --scale 2 --mode 3840x2160"' />
 </keybind>
 <keybind key="W-c">
-  <action name="VirtualOutputRemove"/>
+  <action name="VirtualOutputRemove" />
 </keybind>
 ```
 
@@ -366,7 +379,7 @@ Actions are used in menus and keyboard/mouse bindings.
 	*output_name* The name of virtual output. If not supplied, will remove
 	the last virtual output added.
 
-*<action name="AutoPlace" policy="value"/>*
+*<action name="AutoPlace" policy="value" />*
 	Reposition the window according to the desired placement policy.
 
 	*policy* [automatic|cursor|center|cascade] Use the specified policy,
@@ -411,7 +424,7 @@ Actions are used in menus and keyboard/mouse bindings.
 	rotating ball not just for moving the cursor, but also for (mouse wheel)
 	scrolling.
 
-	See also *<libinput><scrollFactor>* in labwc-config(5) for fine tuning
+	See also *<libinput><scrollFactor>* in the example config.toml for fine tuning
 	the scroll speed.
 
 *<action name="EnableTabletMouseEmulation" />*++
@@ -423,6 +436,13 @@ Actions are used in menus and keyboard/mouse bindings.
 *<action name="ToggleMagnify">*
 	Toggle the screen magnifier on or off at the last magnification level
 	used.
+
+*<action name="ToggleShowDesktop" />*
+	Minimize all windows in the current workspace so that the desktop
+	becomes visible. On calling the action again the hidden windows are
+	unminimized, provided that - since the initial `ShowDesktop` - (a) no
+	windows have been unminimized; (b) workspaces have not been switched;
+	and (c) no new applications have been started.
 
 *<action name="ZoomIn">*++
 *<action name="ZoomOut">*
@@ -436,6 +456,10 @@ Actions are used in menus and keyboard/mouse bindings.
 	If used as the only action for a binding: clear an earlier defined
 	binding.
 
+*<action name="DebugToggleKeyStateIndicator" />*
+	Toggle visibility of key-state on-screen display (OSD). Note: This is
+	for debugging purposes only.
+
 # CONDITIONAL ACTIONS
 
 Actions that execute other actions. Used in keyboard/mouse bindings.
@@ -448,10 +472,10 @@ Actions that execute other actions. Used in keyboard/mouse bindings.
 
 	```
 	<action name="If">
-	  <query/>
-	  <prompt message=""/>
-	  <then><action/></then>
-	  <else><action/></else>
+	  <query />
+	  <prompt message="" />
+	  <then><action /></then>
+	  <else><action /></else>
 	</action>
 	```
 
@@ -503,7 +527,7 @@ Actions that execute other actions. Used in keyboard/mouse bindings.
 			"right-occupied" directions will not wrap.
 
 		*tiled* [up|right|down|left|up-left|up-right|down-left|down-right|center|any]
-			Whether the client is tiled (snapped) along the the
+			Whether the client is tiled (snapped) along the
 			indicated screen edge.
 
 		*tiled_region*
@@ -533,9 +557,9 @@ Actions that execute other actions. Used in keyboard/mouse bindings.
 		```
 		<keybind key="W-q">
 		  <action name="If">
-		    <prompt message="Quit?"/>
+		    <prompt message="Quit?" />
 		    <then>
-		      <action name="Exit"/>
+		      <action name="Exit" />
 		    </then>
 		  </action>
 		</keybind>
@@ -559,4 +583,4 @@ Actions that execute other actions. Used in keyboard/mouse bindings.
 
 # SEE ALSO
 
-labwc(1), labwc-config(5), labwc-theme(5), glob(7)
+labwc-next(1), glob(7)

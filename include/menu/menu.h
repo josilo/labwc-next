@@ -23,9 +23,11 @@ struct menuitem {
 	char *text;
 	char *icon_name;
 	const char *arrow;
+	uint32_t accelerator;
 	struct menu *parent;
 	struct menu *submenu;
 	bool selectable;
+	bool use_markup;
 	enum menuitem_type type;
 	int native_width;
 	struct wlr_scene_tree *tree;
@@ -54,6 +56,7 @@ struct menu {
 		struct menuitem *item;
 	} selection;
 	struct wlr_scene_tree *scene_tree;
+	bool pending_auto_enter;
 	bool is_pipemenu_child;
 	bool align_left;
 	bool has_icons;
@@ -66,6 +69,16 @@ struct menu {
 /* For keyboard support */
 void menu_item_select_next(void);
 void menu_item_select_previous(void);
+
+/**
+ * menu_process_accelerator - executes the next menu item with
+ * a matching accelerator, starting after the current selection
+ *
+ * @accelerator a shortcut to quickly select/open an item, defined in menu.xml
+ * with an underscore in the item label before the target letter.
+ */
+void menu_process_accelerator(uint32_t accelerator);
+
 void menu_submenu_enter(void);
 void menu_submenu_leave(void);
 bool menu_call_selected_actions(void);
@@ -100,7 +113,7 @@ void menu_open_root(struct menu *menu, int x, int y);
 void menu_process_cursor_motion(struct wlr_scene_node *node);
 
 /**
- *  menu_close_root- close root menu
+ *  menu_close_root - close root menu
  *
  * This function will close server.menu_current and set it to NULL.
  * Asserts that server.input_mode is set to LAB_INPUT_STATE_MENU.

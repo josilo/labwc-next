@@ -26,14 +26,14 @@
 	#define wlr_backend_is_drm(backend) (false)
 #endif
 
-static const char *const env_vars[] = {
+static const char * const env_vars[] = {
 	"WAYLAND_DISPLAY",
 	"XDG_CURRENT_DESKTOP",
 	"XCURSOR_SIZE",
 	"XCURSOR_THEME",
 	"XDG_SESSION_TYPE",
-	"LABWC_PID",
-	"LABWC_VER",
+	"LABWC_NEXT_PID",
+	"LABWC_NEXT_VER",
 	NULL
 };
 
@@ -219,12 +219,12 @@ execute_update(const char *env_keys, const char *env_unset_keys, bool initialize
 	char *cmd =
 		strdup_printf("dbus-update-activation-environment %s",
 			initialize ? env_keys : env_unset_keys);
-	spawn_async_no_shell(cmd);
+	spawn_sync_no_shell(cmd);
 	free(cmd);
 
 	cmd = strdup_printf("systemctl --user %s %s",
 		initialize ? "import-environment" : "unset-environment", env_keys);
-	spawn_async_no_shell(cmd);
+	spawn_sync_no_shell(cmd);
 	free(cmd);
 }
 

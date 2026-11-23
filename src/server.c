@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #define _POSIX_C_SOURCE 200809L
 #include "config.h"
+#include <assert.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -9,6 +10,8 @@
 #include <wlr/config.h>
 #include <wlr/render/allocator.h>
 #include <wlr/types/wlr_alpha_modifier_v1.h>
+#include <wlr/types/wlr_color_management_v1.h>
+#include <wlr/types/wlr_color_representation_v1.h>
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_drm.h>
@@ -54,6 +57,7 @@
 #include "common/spawn.h"
 #include "ipc.h"
 #include "common/mem.h"
+#include "common/nag.h"
 #include "common/scene-helpers.h"
 #include "config/rcxml.h"
 #include "config/session.h"
@@ -90,8 +94,15 @@ reload_config_and_theme(void)
 	/* Avoid UAF when dialog client is used during reconfigure */
 	action_prompts_destroy();
 
+	/*
+	 * Cancel any pending auto-raise before reloading config in case the
+	 * raiseOnFocusDelay option was disabled or changed.
+	 */
+	desktop_cancel_pending_auto_raise();
+
 	scaled_buffer_invalidate_sharing();
 	rcxml_finish();
+	nag_reset();
 	rcxml_read(rc.config_file);
 	theme_finish(rc.theme);
 	theme_init(rc.theme, rc.theme_name);
@@ -113,6 +124,8 @@ reload_config_and_theme(void)
 	resize_indicator_reconfigure();
 	kde_server_decoration_update_default();
 	workspaces_reconfigure();
+
+	wl_event_loop_add_idle(server.wl_event_loop, nag_show_callback, NULL);
 }
 
 static int
@@ -140,62 +153,90 @@ handle_sigchld(int signal, void *data)
 	siginfo_t info;
 	info.si_pid = 0;
 
-	/* First call waitid() with NOWAIT which doesn't consume the zombie */
-	if (waitid(P_ALL, /*id*/ 0, &info, WEXITED | WNOHANG | WNOWAIT) == -1) {
-		return 0;
-	}
+	/*
+	 * We may get a single SIGCHILD event although there are
+	 * multiple childs terminating so we loop through them.
+	 *
+	 * A 'while true; labwc --reconfigure; done' loop along
+	 * with some config error which causes labnag to re-spawn
+	 * constantly is a good test for this handler.
+	 */
 
-	if (info.si_pid == 0) {
-		/* No children in waitable state */
-		return 0;
-	}
-
-#if HAVE_XWAYLAND
-	/* Ensure that we do not break xwayland lazy initialization */
-	if (server.xwayland && server.xwayland->server
-			&& info.si_pid == server.xwayland->server->pid) {
-		return 0;
-	}
-#endif
-
-	/* And then do the actual (consuming) lookup again */
-	int ret = waitid(P_PID, info.si_pid, &info, WEXITED);
-	if (ret == -1) {
-		wlr_log(WLR_ERROR, "blocking waitid() for %ld failed: %d",
-			(long)info.si_pid, ret);
-		return 0;
-	}
-
-	const char *signame;
-	switch (info.si_code) {
-	case CLD_EXITED:
-		if (!action_check_prompt_result(info.si_pid, info.si_status)) {
-			wlr_log(info.si_status == 0 ? WLR_DEBUG : WLR_ERROR,
-				"spawned child %ld exited with %d",
-				(long)info.si_pid, info.si_status);
+	/* First call waitid() with NOWAIT which doesn't consume the zombie. */
+	while (waitid(P_ALL, /*id*/ 0, &info, WEXITED | WNOHANG | WNOWAIT) != -1) {
+		if (info.si_pid == 0) {
+			/* No children in waitable state */
+			return 0;
 		}
-		break;
-	case CLD_KILLED:
-	case CLD_DUMPED:
-		signame = strsignal(info.si_status);
-		wlr_log(WLR_ERROR,
-			"spawned child %ld terminated with signal %d (%s)",
-				(long)info.si_pid, info.si_status,
-				signame ? signame : "unknown");
-		/* Allow cleanup of killed prompt */
-		action_check_prompt_result(info.si_pid, -info.si_status);
-		break;
-	default:
-		wlr_log(WLR_ERROR,
-			"spawned child %ld terminated unexpectedly: %d"
-			" please report", (long)info.si_pid, info.si_code);
-	}
 
-	if (info.si_pid == server.primary_client_pid) {
-		wlr_log(WLR_INFO, "primary client %ld exited", (long)info.si_pid);
-		wl_display_terminate(server.wl_display);
-	}
+	#if HAVE_XWAYLAND
+		/* Ensure that we do not break xwayland lazy initialization */
+		if (server.xwayland && server.xwayland->server
+				&& info.si_pid == server.xwayland->server->pid) {
+			/*
+			 * We need to completely return here to prevent running
+			 * into an endless loop without giving the wlroots internal
+			 * xwayland startup handler a chance to use its own waitid().
+			 *
+			 * Further queued up child process terminatations will be
+			 * dealt with on the next SIGCHLD handler invocation and
+			 * float around as zombies until that point.
+			 */
+			return 0;
+		}
+	#endif
 
+		/* And then do the actual (consuming) lookup again */
+		int ret = waitid(P_PID, info.si_pid, &info, WEXITED);
+		if (ret == -1) {
+			wlr_log(WLR_ERROR, "blocking waitid() for %ld failed: %d",
+				(long)info.si_pid, ret);
+			goto check_next;
+		}
+
+		const char *signame;
+		switch (info.si_code) {
+		case CLD_EXITED:
+			if (!action_check_prompt_result(info.si_pid, info.si_status)
+					&& !nag_check_pid(info.si_pid)) {
+				wlr_log(info.si_status == 0 ? WLR_DEBUG : WLR_ERROR,
+					"spawned child %ld exited with %d",
+					(long)info.si_pid, info.si_status);
+			}
+			break;
+		case CLD_KILLED:
+		case CLD_DUMPED:
+			signame = strsignal(info.si_status);
+			wlr_log(WLR_ERROR,
+				"spawned child %ld terminated with signal %d (%s)",
+					(long)info.si_pid, info.si_status,
+					signame ? signame : "unknown");
+			/* Allow cleanup of killed prompt */
+			action_check_prompt_result(info.si_pid, -info.si_status);
+			nag_check_pid(info.si_pid);
+			break;
+		default:
+			wlr_log(WLR_ERROR,
+				"spawned child %ld terminated unexpectedly: %d"
+				" please report", (long)info.si_pid, info.si_code);
+		}
+
+		if (info.si_pid == server.primary_client_pid) {
+			wlr_log(WLR_INFO, "primary client %ld exited", (long)info.si_pid);
+			wl_display_terminate(server.wl_display);
+		}
+check_next:
+		/*
+		 * We need each initial WNOHANG | WNOWAIT call to clearly identify
+		 * if there are no more children to wait for so we reset si_pid
+		 * as recommended for portability in the waitid man page.
+		 *
+		 * Note that at least on one of the devs linux system the call
+		 * actually returns with -1 in that case, contrary to what is
+		 * written in the man page. We do handle both cases.
+		 */
+		info.si_pid = 0;
+	}
 	return 0;
 }
 
@@ -212,39 +253,6 @@ handle_drm_lease_request(struct wl_listener *listener, void *data)
 	}
 }
 #endif
-
-static bool
-protocol_is_privileged(const struct wl_interface *iface)
-{
-	static const char * const rejected[] = {
-		"wp_drm_lease_device_v1",
-		"zwlr_gamma_control_manager_v1",
-		"zwlr_output_manager_v1",
-		"zwlr_output_power_manager_v1",
-		"zwp_input_method_manager_v2",
-		"zwlr_virtual_pointer_manager_v1",
-		"zwp_virtual_keyboard_manager_v1",
-		"zwlr_export_dmabuf_manager_v1",
-		"zwlr_screencopy_manager_v1",
-		"ext_data_control_manager_v1",
-		"zwlr_data_control_manager_v1",
-		"wp_security_context_manager_v1",
-		"ext_idle_notifier_v1",
-		"zwlr_foreign_toplevel_manager_v1",
-		"ext_foreign_toplevel_list_v1",
-		"ext_session_lock_manager_v1",
-		"zwlr_layer_shell_v1",
-		"ext_workspace_manager_v1",
-		"ext_image_copy_capture_manager_v1",
-		"ext_output_image_capture_source_manager_v1",
-	};
-	for (size_t i = 0; i < ARRAY_SIZE(rejected); i++) {
-		if (!strcmp(iface->name, rejected[i])) {
-			return true;
-		}
-	}
-	return false;
-}
 
 static bool
 allow_for_sandbox(const struct wlr_security_context_v1_state *security_state,
@@ -288,6 +296,8 @@ allow_for_sandbox(const struct wlr_security_context_v1_state *security_state,
 		"xdg_wm_dialog_v1",
 		/* plus */
 		"wp_alpha_modifier_v1",
+		"wp_color_manager_v1",
+		"wp_color_representation_manager_v1",
 		"wp_linux_drm_syncobj_manager_v1",
 		"zxdg_exporter_v1",
 		"zxdg_exporter_v2",
@@ -326,6 +336,11 @@ server_global_filter(const struct wl_client *client, const struct wl_global *glo
 	}
 #endif
 
+	uint32_t iface_id = parse_privileged_interface(iface->name);
+	if (iface_id && !(iface_id & rc.allowed_interfaces)) {
+		return false;
+	}
+
 	/* Do not allow security_context_manager_v1 to clients with a security context attached */
 	const struct wlr_security_context_v1_state *security_context =
 		wlr_security_context_manager_v1_lookup_client(
@@ -341,11 +356,11 @@ server_global_filter(const struct wl_client *client, const struct wl_global *glo
 		/*
 		 * TODO: The following call is basically useless right now
 		 *       and should be replaced with
-		 *       assert(allow || protocol_is_privileged(iface));
+		 *       assert(allow || iface_id);
 		 *       This ensures that our lists are in sync with what
 		 *       protocols labwc supports.
 		 */
-		if (!allow && !protocol_is_privileged(iface)) {
+		if (!allow && !iface_id) {
 			wlr_log(WLR_ERROR, "Blocking unknown protocol %s", iface->name);
 		} else if (!allow) {
 			wlr_log(WLR_DEBUG, "Blocking %s for security context %s->%s->%s",
@@ -431,12 +446,47 @@ handle_renderer_lost(struct wl_listener *listener, void *data)
 	wlr_renderer_destroy(old_renderer);
 }
 
+static struct wl_listener bell_ring_listener;
+
 static void
 handle_bell_ring(struct wl_listener *listener, void *data)
 {
 	if (rc.bell_command) {
 		spawn_async_no_shell(rc.bell_command);
 	}
+}
+
+static void
+handle_toplevel_capture_source_destroy(struct wl_listener *listener, void *data)
+{
+	struct view *view = wl_container_of(listener, view, capture.on_capture_source_destroy);
+	assert(view->capture.source);
+	view->capture.source = NULL;
+	wl_list_remove(&listener->link);
+	wl_list_init(&listener->link);
+}
+
+static void
+handle_toplevel_capture_request(struct wl_listener *listener, void *data)
+{
+	struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request *request = data;
+	struct view *view = request->toplevel_handle->data;
+	assert(view);
+	wlr_log(WLR_INFO, "Capturing toplevel %s", view->app_id);
+
+	if (!view->capture.source) {
+		view->capture.source = wlr_ext_image_capture_source_v1_create_with_scene_node(
+			&view->capture.scene->tree.node, server.wl_event_loop,
+			server.allocator, server.renderer);
+		assert(view->capture.source);
+
+		view->capture.on_capture_source_destroy.notify =
+			handle_toplevel_capture_source_destroy;
+		wl_signal_add(&view->capture.source->events.destroy,
+			&view->capture.on_capture_source_destroy);
+	}
+	wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(
+		request, view->capture.source);
 }
 
 void
@@ -603,6 +653,47 @@ server_init(void)
 	 * | output->layer_tree[0]              | background layer surfaces (e.g. swaybg)
 	 */
 
+	if (server.renderer->features.input_color_transform) {
+		const enum wp_color_manager_v1_render_intent render_intents[] = {
+			WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL,
+		};
+		size_t transfer_functions_len = 0;
+		enum wp_color_manager_v1_transfer_function *transfer_functions =
+			wlr_color_manager_v1_transfer_function_list_from_renderer(
+				server.renderer, &transfer_functions_len);
+
+		size_t primaries_len = 0;
+		enum wp_color_manager_v1_primaries *primaries =
+			wlr_color_manager_v1_primaries_list_from_renderer(
+				server.renderer, &primaries_len);
+
+		struct wlr_color_manager_v1 *cm = wlr_color_manager_v1_create(
+			server.wl_display, 2, &(struct wlr_color_manager_v1_options){
+				.features = {
+					.parametric = true,
+					.set_mastering_display_primaries = true,
+				},
+				.render_intents = render_intents,
+				.render_intents_len = ARRAY_SIZE(render_intents),
+				.transfer_functions = transfer_functions,
+				.transfer_functions_len = transfer_functions_len,
+				.primaries = primaries,
+				.primaries_len = primaries_len,
+			});
+
+		free(transfer_functions);
+		free(primaries);
+
+		if (cm) {
+			wlr_scene_set_color_manager_v1(server.scene, cm);
+		} else {
+			wlr_log(WLR_ERROR, "unable to create color manager");
+		}
+	}
+
+	wlr_color_representation_manager_v1_create_with_renderer(
+		server.wl_display, 1, server.renderer);
+
 	server.workspace_tree = lab_wlr_scene_tree_create(&server.scene->tree);
 	server.xdg_popup_tree = lab_wlr_scene_tree_create(&server.scene->tree);
 #if HAVE_XWAYLAND
@@ -678,6 +769,19 @@ server_init(void)
 	wlr_screencopy_manager_v1_create(server.wl_display);
 	wlr_ext_image_copy_capture_manager_v1_create(server.wl_display, 1);
 	wlr_ext_output_image_capture_source_manager_v1_create(server.wl_display, 1);
+
+	server.toplevel_capture.manager =
+		wlr_ext_foreign_toplevel_image_capture_source_manager_v1_create(
+			server.wl_display, 1);
+	if (server.toplevel_capture.manager) {
+		server.toplevel_capture.on.new_request.notify = handle_toplevel_capture_request;
+		wl_signal_add(&server.toplevel_capture.manager->events.new_request,
+			&server.toplevel_capture.on.new_request);
+	} else {
+		/* Allow safe removal on shutdown */
+		wl_list_init(&server.toplevel_capture.on.new_request.link);
+	}
+
 	wlr_data_control_manager_v1_create(server.wl_display);
 	wlr_ext_data_control_manager_v1_create(server.wl_display,
 		LAB_EXT_DATA_CONTROL_VERSION);
@@ -739,11 +843,12 @@ server_init(void)
 	layers_init();
 
 	/* XDG system bell */
-	static struct wl_listener bell_ring_listener;
 	struct wlr_xdg_system_bell_v1 *bell =
 		wlr_xdg_system_bell_v1_create(server.wl_display, 1);
-	bell_ring_listener.notify = handle_bell_ring;
-	wl_signal_add(&bell->events.ring, &bell_ring_listener);
+	if (bell) {
+		bell_ring_listener.notify = handle_bell_ring;
+		wl_signal_add(&bell->events.ring, &bell_ring_listener);
+	}
 
 	/* These get cleaned up automatically on display destroy */
 	struct wlr_xdg_foreign_registry *registry =
@@ -758,6 +863,7 @@ server_init(void)
 #if HAVE_XWAYLAND
 	xwayland_server_init(server.compositor);
 #endif
+	wl_event_loop_add_idle(server.wl_event_loop, nag_show_callback, NULL);
 }
 
 void
@@ -805,6 +911,7 @@ server_finish(void)
 
 	wl_display_destroy_clients(server.wl_display);
 
+	nag_finish();
 	seat_finish();
 	output_finish();
 	xdg_shell_finish();
@@ -814,10 +921,15 @@ server_finish(void)
 	wl_list_remove(&server.new_constraint.link);
 	wl_list_remove(&server.output_power_manager_set_mode.link);
 	wl_list_remove(&server.tearing_new_object.link);
+	if (bell_ring_listener.notify) {
+		wl_list_remove(&bell_ring_listener.link);
+	}
 	if (server.drm_lease_request.notify) {
 		wl_list_remove(&server.drm_lease_request.link);
 		server.drm_lease_request.notify = NULL;
 	}
+
+	wl_list_remove(&server.toplevel_capture.on.new_request.link);
 
 	wlr_backend_destroy(server.backend);
 	wlr_allocator_destroy(server.allocator);

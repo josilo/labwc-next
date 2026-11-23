@@ -199,7 +199,7 @@ adjust_for_motion_sensitivity(double motion_sensitivity, double *dx, double *dy)
 	*dy = *dy * motion_sensitivity;
 }
 
-static struct wlr_surface*
+static struct wlr_surface *
 tablet_get_coords(struct drawing_tablet *tablet, struct drawing_tablet_tool *tool,
 		double *x, double *y, double *dx, double *dy)
 {
@@ -431,8 +431,6 @@ handle_tablet_tool_axis(struct wl_listener *listener, void *data)
 	 */
 	tool->dx = 0;
 	tool->dy = 0;
-	tool->tilt_x = 0;
-	tool->tilt_y = 0;
 
 	if (ev->updated_axes & WLR_TABLET_TOOL_AXIS_X) {
 		tool->x = ev->x;

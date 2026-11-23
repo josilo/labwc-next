@@ -3,7 +3,9 @@
 #include "menu/menu.h"
 #include <assert.h>
 #include <cairo.h>
+#include <glib.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -83,6 +85,7 @@ menu_create(struct menu *parent, const char *id,
 	menu->label = xstrdup(label ? label : id);
 	menu->parent = parent;
 	menu->is_pipemenu_child = waiting_for_pipe_menu;
+	menu->pending_auto_enter = false;
 	return menu;
 }
 
@@ -131,6 +134,92 @@ validate(void)
 	}
 }
 
+/* Read a single Unicode codepoint and convert it to lowercase */
+static uint32_t
+read_unicode_char_lowercase(const char *first_byte, size_t *bytes_read)
+{
+	assert(bytes_read);
+
+	if (string_null_or_empty(first_byte)) {
+		*bytes_read = 0;
+		return 0;
+	}
+
+	gunichar codepoint = g_utf8_get_char_validated(first_byte, -1);
+
+	bool partial_read = (codepoint == (gunichar)-2);
+	bool failed_read = (codepoint == (gunichar)-1);
+	if (partial_read || failed_read) {
+		/* Read only the first byte */
+		*bytes_read = 1;
+		return (uint32_t)(unsigned char)first_byte[0];
+	}
+
+	*bytes_read = (size_t)(g_utf8_next_char(first_byte) - first_byte);
+
+	return (uint32_t)g_unichar_tolower(codepoint);
+}
+
+/* Retrieve the accelerator from an item label */
+static void
+item_parse_accelerator(struct menuitem *item, const char *text)
+{
+	const char *accel_ptr = NULL;
+	char *underscore = strchr(text, '_');
+	while (underscore) {
+		if (underscore[1] == '_') {
+			/* Ignore escaped underscores */
+			underscore = strchr(underscore + 2, '_');
+		} else if (underscore[1] != '\0') {
+			/* Found a valid accelerator */
+			accel_ptr = underscore + 1;
+			break;
+		} else {
+			/* Ignore empty accelerator */
+			break;
+		}
+	}
+
+	size_t bytes_read = 0;
+	if (!accel_ptr) {
+		/* Default to the first char */
+		item->text = xstrdup(text);
+		item->accelerator = read_unicode_char_lowercase(text, &bytes_read);
+	} else {
+		/* Set the accelerator and remove the preceding underscore */
+		item->use_markup = true;
+		item->accelerator = read_unicode_char_lowercase(accel_ptr, &bytes_read);
+		char *prefix = g_markup_escape_text(text, accel_ptr - 1 - text);
+		char *accelerator = g_markup_escape_text(accel_ptr, bytes_read);
+		char *suffix = g_markup_escape_text(accel_ptr + bytes_read, -1);
+		item->text = strdup_printf("%s<u>%s</u>%s", prefix, accelerator, suffix);
+		g_free(prefix);
+		g_free(accelerator);
+		g_free(suffix);
+	}
+}
+
+/* Remove underscores used for escaping other underscores from a string */
+static void
+unescape_underscores(char *text)
+{
+	if (!text) {
+		return;
+	}
+
+	char *src = text;
+	char *dst = text;
+	while (*src) {
+		if (*src == '_' && *(src + 1) == '_') {
+			*dst++ = '_';
+			src += 2;
+		} else {
+			*dst++ = *src++;
+		}
+	}
+	*dst = '\0';
+}
+
 static struct menuitem *
 item_create(struct menu *menu, const char *text, const char *icon_name, bool show_arrow)
 {
@@ -142,8 +231,9 @@ item_create(struct menu *menu, const char *text, const char *icon_name, bool sho
 	menuitem->parent = menu;
 	menuitem->selectable = true;
 	menuitem->type = LAB_MENU_ITEM;
-	menuitem->text = xstrdup(text);
 	menuitem->arrow = show_arrow ? "›" : NULL;
+	item_parse_accelerator(menuitem, text);
+	unescape_underscores(menuitem->text);
 
 #if HAVE_LIBSFDO
 	if (rc.menu_show_icons && !string_null_or_empty(icon_name)) {
@@ -318,8 +408,8 @@ item_create_scene_for_state(struct menuitem *item, float *text_color,
 	/* Create label */
 	struct scaled_font_buffer *label_buffer = scaled_font_buffer_create(tree);
 	assert(label_buffer);
-	scaled_font_buffer_update(label_buffer, item->text, label_max_width,
-		&rc.font_menuitem, text_color, bg_color);
+	scaled_font_buffer_update_markup(label_buffer, item->text, label_max_width,
+		&rc.font_menuitem, text_color, bg_color, item->use_markup);
 	/* Position label — left-aligned with optional extra padding, or centered */
 	int x;
 	int y = (theme->menu_item_height - label_buffer->height) / 2;
@@ -820,13 +910,13 @@ init_rootmenu(void)
 	struct menu *menu = menu_get_by_id("root-menu");
 	struct menuitem *item;
 
-	/* Default menu if no menu.xml found */
+	/* Default menu if no TOML menu found */
 	if (!menu) {
 		menu = menu_create(NULL, "root-menu", "");
 
 		item = item_create(menu, _("Terminal"), NULL, false);
 		struct action *action = item_add_action(item, "Execute");
-		action_arg_add_str(action, "command", "lab-sensible-terminal");
+		action_arg_add_str(action, "command", "labwc-next-sensible-terminal");
 
 		separator_create(menu, NULL);
 
@@ -843,7 +933,7 @@ init_windowmenu(void)
 	struct menu *menu = menu_get_by_id("client-menu");
 	struct menuitem *item;
 
-	/* Default menu if no menu.xml found */
+	/* Default menu if no TOML menu found */
 	if (!menu) {
 		menu = menu_create(NULL, "client-menu", "");
 		item = item_create(menu, _("Minimize"), NULL, false);
@@ -1351,17 +1441,18 @@ menu_toml_from_buf(struct menu *parent, struct buf *buf)
 	return true;
 }
 
-static void
+static bool
 create_pipe_menu(struct menu_pipe_context *ctx)
 {
 	if (!menu_toml_from_buf(ctx->pipemenu, &ctx->buf)) {
-		return;
+		return false;
 	}
 	/* TODO: apply validate() only for generated pipemenus */
 	validate();
 
 	/* Finally open the new submenu tree */
 	open_menu(ctx->pipemenu, ctx->anchor_rect);
+	return true;
 }
 
 static void
@@ -1385,17 +1476,24 @@ handle_pipemenu_timeout(void *_ctx)
 	wlr_log(WLR_ERROR, "[pipemenu %ld] timeout reached, killing %s",
 		(long)ctx->pid, ctx->pipemenu->execute);
 	kill(ctx->pid, SIGTERM);
+	ctx->pipemenu->pending_auto_enter = false;
 	pipemenu_ctx_destroy(ctx);
 	return 0;
 }
+
+static struct menu *get_selection_leaf(void);
 
 static int
 handle_pipemenu_readable(int fd, uint32_t mask, void *_ctx)
 {
 	struct menu_pipe_context *ctx = _ctx;
+	struct menu *menu = ctx->pipemenu;
 	/* two 4k pages + 1 NULL byte */
 	char data[8193];
 	ssize_t size;
+
+	/* Track whether the pipemenu parsed and opened successfully. */
+	bool create_success = false;
 
 	do {
 		/* leave space for terminating NULL byte */
@@ -1419,21 +1517,35 @@ handle_pipemenu_readable(int fd, uint32_t mask, void *_ctx)
 
 	wlr_log(WLR_DEBUG, "[pipemenu %ld] read %ld bytes of data", (long)ctx->pid, size);
 	if (size) {
+		if (memchr(data, '\0', size)) {
+			wlr_log(WLR_ERROR, "unexpected NUL byte in TOML pipemenu");
+			goto clean_up;
+		}
 		data[size] = '\0';
 		buf_add(&ctx->buf, data);
 		return 0;
 	}
 
-	/* Guard against badly formed data such as binary input */
-	if (!str_starts_with(ctx->buf.data, '<', " \t\r\n")) {
-		wlr_log(WLR_ERROR, "expect xml data to start with '<'; abort pipemenu");
-		goto clean_up;
-	}
-
-	create_pipe_menu(ctx);
+	create_success = ctx->buf.len && create_pipe_menu(ctx);
 
 clean_up:
+	/*
+	 * This unsets the waiting_for_pipemenu flag
+	 * so that menu_submenu_enter() won't be blocked
+	 */
 	pipemenu_ctx_destroy(ctx);
+
+	if (menu && menu->pending_auto_enter) {
+		menu->pending_auto_enter = false;
+
+		if (create_success) {
+			struct menu *active_leaf = get_selection_leaf();
+			if (active_leaf && active_leaf->selection.menu == menu) {
+				menu_submenu_enter();
+			}
+		}
+	}
+
 	return 0;
 }
 
@@ -1613,6 +1725,64 @@ menu_item_select_previous(void)
 	menu_item_select(/* forward */ false);
 }
 
+void
+menu_process_accelerator(uint32_t accelerator)
+{
+	struct menu *menu = get_selection_leaf();
+	if (!menu || wl_list_empty(&menu->menuitems)) {
+		return;
+	}
+
+	bool needs_exec = false;
+	bool matched = false;
+
+	struct menuitem *selection = menu->selection.item;
+	struct wl_list *start = selection ? &selection->link : &menu->menuitems;
+	struct wl_list *current = start;
+	struct menuitem *item = NULL;
+	struct menuitem *next_selection = NULL;
+	do {
+		current = current->next;
+		if (current == &menu->menuitems) {
+			/* Allow wrap around */
+			continue;
+		}
+		item = wl_container_of(current, item, link);
+		if (item->accelerator == accelerator) {
+			if (!matched) {
+				/* Found first match */
+				next_selection = item;
+				needs_exec = true;
+				matched = true;
+			} else {
+				/*
+				 * Found another match,
+				 * cycle selection instead of executing
+				 */
+				needs_exec = false;
+				break;
+			}
+		}
+	} while (current != start);
+
+	if (!next_selection) {
+		return;
+	}
+
+	menu_process_item_selection(next_selection);
+
+	if (needs_exec && next_selection->submenu) {
+		/* Since we can't execute a submenu, enter it */
+		needs_exec = false;
+		menu_submenu_enter();
+		return;
+	}
+
+	if (needs_exec) {
+		menu_call_selected_actions();
+	}
+}
+
 bool
 menu_call_selected_actions(void)
 {
@@ -1630,6 +1800,11 @@ menu_submenu_enter(void)
 {
 	struct menu *menu = get_selection_leaf();
 	if (!menu || !menu->selection.menu) {
+		return;
+	}
+
+	if (waiting_for_pipe_menu) {
+		menu->selection.menu->pending_auto_enter = true;
 		return;
 	}
 

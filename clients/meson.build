@@ -39,7 +39,7 @@ if get_option('labnag').allowed()
   endif
 
   executable(
-    'labnag',
+    'labwc-next-nag',
     nag_sources,
     dependencies: [
       cairo,
@@ -57,5 +57,5 @@ if get_option('labnag').allowed()
   )
 endif
 
-clients = files('lab-sensible-terminal')
+clients = files('labwc-next-sensible-terminal')
 install_data(clients, install_dir: get_option('bindir'))

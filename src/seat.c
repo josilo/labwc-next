@@ -257,7 +257,24 @@ configure_libinput(struct wlr_input_device *wlr_input_device)
 			wlr_log(WLR_INFO, "pointer speed not configured");
 		}
 
-		if (dc->accel_profile > 0) {
+		if (dc->accel_profile == LIBINPUT_CONFIG_ACCEL_PROFILE_CUSTOM) {
+			struct libinput_config_accel *config =
+				libinput_custom_accel_create(dc);
+			if (config) {
+				enum libinput_config_status status =
+					libinput_device_config_accel_apply(libinput_dev,
+						config);
+				if (status != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+					wlr_log(WLR_ERROR, "custom acceleration: %s",
+						libinput_config_status_to_str(status));
+				} else {
+					wlr_log(WLR_INFO,
+						"custom acceleration configured; "
+						"pointerSpeed has no effect");
+				}
+				libinput_config_accel_destroy(config);
+			}
+		} else if (dc->accel_profile > 0) {
 			wlr_log(WLR_INFO,
 				"pointer accel profile configured (%d)",
 				dc->accel_profile);
@@ -314,6 +331,20 @@ configure_libinput(struct wlr_input_device *wlr_input_device)
 		libinput_device_config_click_set_method(libinput_dev, dc->click_method);
 	}
 
+	libinput_device_config_click_set_clickfinger_button_map(libinput_dev,
+		libinput_device_config_click_get_default_clickfinger_button_map(
+			libinput_dev));
+	if ((libinput_device_config_click_get_methods(libinput_dev)
+			& LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER) == 0
+			|| dc->clickfinger_button_map < 0) {
+		wlr_log(WLR_INFO, "clickfinger button map not configured");
+	} else {
+		wlr_log(WLR_INFO, "clickfinger button map configured (%d)",
+			dc->clickfinger_button_map);
+		libinput_device_config_click_set_clickfinger_button_map(
+			libinput_dev, dc->clickfinger_button_map);
+	}
+
 	libinput_device_config_scroll_set_method(libinput_dev,
 		libinput_device_config_scroll_get_default_method(libinput_dev));
 	if (dc->scroll_method < 0) {
@@ -326,6 +357,16 @@ configure_libinput(struct wlr_input_device *wlr_input_device)
 		wlr_log(WLR_INFO, "scroll method configured (%d)",
 			dc->scroll_method);
 		libinput_device_config_scroll_set_method(libinput_dev, dc->scroll_method);
+	}
+
+	libinput_device_config_scroll_set_button(libinput_dev,
+		libinput_device_config_scroll_get_default_button(libinput_dev));
+	if (dc->scroll_button < 0) {
+		wlr_log(WLR_INFO, "scroll button not configured");
+	} else {
+		wlr_log(WLR_INFO, "scroll button configured (%d)",
+			dc->scroll_button);
+		libinput_device_config_scroll_set_button(libinput_dev, dc->scroll_button);
 	}
 
 	libinput_device_config_send_events_set_mode(libinput_dev,
@@ -351,6 +392,18 @@ configure_libinput(struct wlr_input_device *wlr_input_device)
 	} else {
 		wlr_log(WLR_INFO, "calibration matrix configured");
 		libinput_device_config_calibration_set_matrix(libinput_dev, dc->calibration_matrix);
+	}
+
+	libinput_device_config_rotation_set_angle(libinput_dev,
+		libinput_device_config_rotation_get_default_angle(libinput_dev));
+	if (libinput_device_config_rotation_is_available(libinput_dev) == 0
+			|| dc->rotation_angle < 0) {
+		wlr_log(WLR_INFO, "rotation angle not configured");
+	} else {
+		wlr_log(WLR_INFO, "rotation angle configured (%d)",
+			dc->rotation_angle);
+		libinput_device_config_rotation_set_angle(libinput_dev,
+			dc->rotation_angle);
 	}
 
 	wlr_log(WLR_INFO, "scroll factor configured (%g)", dc->scroll_factor);
@@ -851,6 +904,9 @@ seat_focus_surface(struct seat *seat, struct wlr_surface *surface)
 void
 seat_focus_lock_surface(struct seat *seat, struct wlr_surface *surface)
 {
+	if (wlr_seat_keyboard_has_grab(seat->wlr_seat)) {
+		wlr_seat_keyboard_end_grab(seat->wlr_seat);
+	}
 	seat_focus(seat, surface, /*replace_exclusive_layer*/ true,
 		/*is_lock_surface*/ true);
 }

@@ -1,7 +1,7 @@
 # labwc-next config.toml
 #
 # Drop this file at ~/.config/labwc-next/config.toml.
-# When present it is loaded instead of rc.xml.
+# Copy to ~/.config/labwc-next/config.toml and edit as needed.
 #
 # All values shown are the built-in defaults unless noted otherwise.
 # Lines beginning with # are comments; omit any key to keep the default.
@@ -24,6 +24,10 @@ adaptive-sync = "disabled"
 # "fullscreen", "fullscreen-forced"
 allow-tearing = "disabled"
 
+# Optional output render depth: true requests 10-bit, false requests 8-bit.
+# Omit to keep the compositor default.
+# hdr = true
+
 # Automatically enable newly connected outputs
 auto-enable-outputs = true
 
@@ -38,6 +42,15 @@ primary-selection = true
 
 # Command used for interactive prompt actions (e.g. Execute with prompt)
 # prompt-command = "bemenu-run"
+
+# Optional command for displaying config errors passed on standard input.
+# Defaults to labwc-next-nag.
+# error-command = ""
+
+# Optional allowlist for privileged Wayland protocols. Omit to allow the
+# defaults; an empty array disables all interfaces controlled by this list.
+# [privileged-interfaces]
+# allow = ["zwlr_layer_shell_v1", "ext_workspace_manager_v1"]
 
 # ---------------------------------------------------------------------------
 # [placement]  Where new windows appear
@@ -64,6 +77,8 @@ follow-mouse-requires-movement = true
 
 # Raise focused window to top of stack automatically
 raise-on-focus = false
+# Delay before raising a window focused by pointer motion (ms).
+raise-on-focus-delay = 0
 
 # ---------------------------------------------------------------------------
 # [theme]  Appearance
@@ -334,6 +349,25 @@ notify-client = "always"
 enabled     = true
 delay-inner = 500   # ms before overlay appears for inner-range snaps
 delay-outer = 500   # ms before overlay appears for outer-range snaps
+placement = "below" # "below" or "above" the dragged window
+
+# Optional named regions used by SnapToRegion and region snapping.
+# Coordinates and dimensions are percentages of usable output space.
+# [[region]]
+# name = "Left"
+# x = 0
+# y = 0
+# width = 50
+# height = 100
+
+# Optional libinput category: "default", "touch", "touchpad", "non-touch",
+# or a specific device name. Accel profiles: "flat", "adaptive", "custom".
+# [[libinput]]
+# device = "touchpad"
+# accel-profile = "custom"
+# clickfinger-button-map = "lrm" # "lrm" or "lmr"
+# scroll-curve = { step = 0.1, points = "0 0.1 0.4" }
+# motion-curve and fallback-curve use the same format.
 
 # ---------------------------------------------------------------------------
 # [theme.colors]  SSD / UI colors (all default values shown)
