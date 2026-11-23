@@ -306,6 +306,7 @@ parse_theme(toml_datum_t root)
 		fill_font(font_all, &rc.font_menuheader);
 		fill_font(font_all, &rc.font_menuitem);
 		fill_font(font_all, &rc.font_osd);
+		fill_font(font_all, &rc.font_regiondrop);
 	}
 
 	/* Per-place font overrides */
@@ -318,6 +319,7 @@ parse_theme(toml_datum_t root)
 		{ "font.menu-header", &rc.font_menuheader },
 		{ "font.menu-item",   &rc.font_menuitem },
 		{ "font.osd",         &rc.font_osd },
+		{ "font.region-drop", &rc.font_regiondrop },
 	};
 	for (size_t k = 0; k < sizeof(font_places) / sizeof(font_places[0]); k++) {
 		toml_datum_t fd = toml_seek(sec, font_places[k].key);
@@ -325,6 +327,82 @@ parse_theme(toml_datum_t root)
 			fill_font(fd, font_places[k].dst);
 		}
 	}
+}
+
+static bool
+append_action_query(toml_datum_t entry, struct wl_list *queries)
+{
+	/* Reject unsupported fields rather than accidentally matching all views. */
+	toml_datum_t fullscreen = toml_get(entry, "fullscreen");
+	if (entry.type != TOML_TABLE || entry.u.tab.size != 1
+			|| fullscreen.type != TOML_BOOLEAN) {
+		return false;
+	}
+	struct view_query *query = view_query_create();
+	query->fullscreen = fullscreen.u.boolean ? LAB_STATE_ENABLED : LAB_STATE_DISABLED;
+	wl_list_append(queries, &query->link);
+	return true;
+}
+
+static void
+append_actions(toml_datum_t actions, struct wl_list *list, unsigned depth)
+{
+	if (actions.type != TOML_ARRAY) {
+		return;
+	}
+	if (depth > 32) {
+		nag_log(WLR_ERROR, "TOML action nesting is too deep");
+		return;
+	}
+	for (int i = 0; i < actions.u.arr.size; ++i) {
+		toml_datum_t entry = actions.u.arr.elem[i];
+		const char *name;
+		if (entry.type != TOML_TABLE || !toml_str(entry, "name", &name)) {
+			continue;
+		}
+		struct action *action = action_create(name);
+		if (!action) {
+			continue;
+		}
+		bool valid = true;
+		bool conditional = !strcasecmp(name, "If") || !strcasecmp(name, "ForEach");
+		for (int j = 0; j < entry.u.tab.size; ++j) {
+			const char *key = entry.u.tab.key[j];
+			toml_datum_t value = entry.u.tab.value[j];
+			if (!strcasecmp(key, "name")) {
+				continue;
+			}
+			if (conditional && !strcmp(key, "query")) {
+				action_arg_add_querylist(action, key);
+				struct wl_list *queries = action_get_querylist(action, key);
+				valid = append_action_query(value, queries);
+			} else if (conditional && (!strcmp(key, "then") || !strcmp(key, "else")
+					|| !strcmp(key, "none"))) {
+				valid = value.type == TOML_ARRAY;
+				if (valid) {
+					action_arg_add_actionlist(action, key);
+					append_actions(value, action_get_actionlist(action, key), depth + 1);
+				}
+			} else if (value.type == TOML_STRING) {
+				action_arg_from_xml_node(action, key, value.u.s);
+			}
+			if (!valid) {
+				nag_log(WLR_ERROR, "Invalid TOML %s argument for %s", key, name);
+				break;
+			}
+		}
+		if (valid) {
+			wl_list_append(list, &action->link);
+		} else {
+			action_free(action);
+		}
+	}
+}
+
+void
+config_toml_append_actions(toml_datum_t actions, struct wl_list *list)
+{
+	append_actions(actions, list, 0);
 }
 
 static void
@@ -381,35 +459,7 @@ parse_keyboard(toml_datum_t root)
 			kb->use_syms_only = layout_dep;
 			kb->allow_when_locked = allow_locked;
 
-			toml_datum_t actions = toml_get(entry, "actions");
-			if (actions.type == TOML_ARRAY) {
-				for (int ai = 0; ai < actions.u.arr.size; ai++) {
-					toml_datum_t act = actions.u.arr.elem[ai];
-					if (act.type != TOML_TABLE) {
-						continue;
-					}
-					const char *name = NULL;
-					if (!toml_str(act, "name", &name) || !name) {
-						continue;
-					}
-					struct action *action = action_create(name);
-					if (!action) {
-						continue;
-					}
-					/* Pass remaining keys as action args */
-					for (int ki = 0; ki < act.u.tab.size; ki++) {
-						const char *akey = act.u.tab.key[ki];
-						if (!strcasecmp(akey, "name")) {
-							continue;
-						}
-						toml_datum_t val = act.u.tab.value[ki];
-						if (val.type == TOML_STRING) {
-							action_arg_from_xml_node(action, akey, val.u.s);
-						}
-					}
-					wl_list_append(&kb->actions, &action->link);
-				}
-			}
+			config_toml_append_actions(toml_get(entry, "actions"), &kb->actions);
 		}
 	}
 }
@@ -455,34 +505,7 @@ parse_mouse(toml_datum_t root)
 				mb->mouse_event = mousebind_event_from_str(event);
 			}
 
-			toml_datum_t actions = toml_get(entry, "actions");
-			if (actions.type == TOML_ARRAY) {
-				for (int ai = 0; ai < actions.u.arr.size; ai++) {
-					toml_datum_t act = actions.u.arr.elem[ai];
-					if (act.type != TOML_TABLE) {
-						continue;
-					}
-					const char *name = NULL;
-					if (!toml_str(act, "name", &name) || !name) {
-						continue;
-					}
-					struct action *action = action_create(name);
-					if (!action) {
-						continue;
-					}
-					for (int ki = 0; ki < act.u.tab.size; ki++) {
-						const char *akey = act.u.tab.key[ki];
-						if (!strcasecmp(akey, "name")) {
-							continue;
-						}
-						toml_datum_t val = act.u.tab.value[ki];
-						if (val.type == TOML_STRING) {
-							action_arg_from_xml_node(action, akey, val.u.s);
-						}
-					}
-					wl_list_append(&mb->actions, &action->link);
-				}
-			}
+			config_toml_append_actions(toml_get(entry, "actions"), &mb->actions);
 		}
 	}
 }
@@ -584,6 +607,7 @@ parse_snapping(toml_datum_t root)
 		}
 	}
 
+	toml_bool(sec, "region-drop-indicator", &rc.regions_drop_indicator);
 	toml_datum_t ov = toml_get(sec, "overlay");
 	if (ov.type == TOML_TABLE) {
 		if (toml_bool(ov, "enabled", &b)) {

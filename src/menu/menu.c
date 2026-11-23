@@ -25,6 +25,7 @@
 #include "common/scene-helpers.h"
 #include "common/spawn.h"
 #include "common/string-helpers.h"
+#include "config/config-toml.h"
 #include "config/rcxml.h"
 #include "labwc.h"
 #include "node.h"
@@ -1082,34 +1083,7 @@ toml_fill_items(struct menu *menu, toml_datum_t items_arr)
 			continue;
 		}
 		struct menuitem *item = item_create(menu, label, icon, false);
-		for (int ai = 0; ai < actions.u.arr.size; ai++) {
-			toml_datum_t act = actions.u.arr.elem[ai];
-			if (act.type != TOML_TABLE) {
-				continue;
-			}
-			toml_datum_t name_d = toml_get(act, "name");
-			if (name_d.type != TOML_STRING) {
-				continue;
-			}
-			struct action *action =
-				action_create(name_d.u.s);
-			if (!action) {
-				continue;
-			}
-			/* Pass remaining keys as action arguments */
-			for (int ki = 0; ki < act.u.tab.size; ki++) {
-				const char *akey = act.u.tab.key[ki];
-				if (!strcasecmp(akey, "name")) {
-					continue;
-				}
-				toml_datum_t val = act.u.tab.value[ki];
-				if (val.type == TOML_STRING) {
-					action_arg_from_xml_node(action,
-						akey, val.u.s);
-				}
-			}
-			wl_list_append(&item->actions, &action->link);
-		}
+		config_toml_append_actions(actions, &item->actions);
 	}
 }
 

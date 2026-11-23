@@ -88,9 +88,53 @@ The format is based on [Keep a Changelog]
 [0.2.0]: NEWS.md#020---2021-04-15
 [0.1.0]: NEWS.md#010---2021-03-05
 
+## Notes on wlroots-0.20
+
+There are some regression warnings worth noting for the switch to wlroots 0.20:
+
+- With wlroots < 0.20.2 lxqt-panel auto-hiding does not work with a panel size
+  greater than 40 [#3600] [wlroots-5392] [wlroots-5407]
+- Some Wine game windows disappear after alt-tab. It is not yet clear where the
+  bug is, but the issue manifests itself when running wlroots-0.20 [#3615]
+  [wlroots-4103]
+- `wl_output` make/model properties are no longer sent because these are legacy
+  and should not be relied on [wlroots-5045]
+
+[wlroots-5392]: https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/5392
+[wlroots-5407]: https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/5407
+[wlroots-4103]: https://gitlab.freedesktop.org/wlroots/wlroots/-/work_items/4103
+[wlroots-5045]: https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/5045
+
 ## unreleased
 
 [unreleased-commits]
+
+### Added
+
+- Add config option `<regions dropIndicator="">` and several theme options for
+  for the new `region-drop-indicator`. @elviosak [#3790]
+- Add fullscreen actions `SetFullscreen` and `UnsetFullscreen`. Also add
+  `fullscreen` parameter to the `If` action `query`. @drougas [#3792]
+- Add `--socket` option to allow users to specify name of wayland socket
+  @LightSith [#3788]
+
+### Fixed
+
+- Put windows snapped to regions on the correct output on un-suspend. @elviosak
+  [#3778] [#3789]
+- Set `XDG_TOPLEVEL_STATE_SUSPENDED` when changing workspaces to avoid
+  unnecessarily re-painting windows and to make QWindow::isExposed() work.
+  @johanmalm @ravi-arnan [#3747] [#3787]
+- Fix Chromium window size issue caused by the client answering each configure
+  with a size that is 1-2px larger than requested. The glitch manifested itself
+  with maximized, fullscreen and tiled windows. @ogulcancelik [#2327] [#3785]
+- Stop source window from moving to other workspace during drag-and-drop to make
+  behaviour consistent with other compositors like sway, hyprland and kwin.
+  @johanmalm [#3784] [#3786]
+- Fix visual artefacts in top corner of titlebar when using a semi-transparent
+  titlebar and rounded corners. @elviosak [#3782] [#3783]
+- Fix stuck modifier when using input method fcitx5 by not aggregating modifier
+  events from IME virtual keyboards. @whistooy [#3437] [#3776]
 
 ## 0.20.3 - 2026-10-30
 
@@ -136,23 +180,6 @@ The format is based on [Keep a Changelog]
   on the executable or when running on Android. @Consolatis [#3662] [#3690]
 - Limit tilde expansion to make it more POSIX shell compliant @domo141 [#3716]
 - Allow `Close` and `Kill` actions while window switching @typebrook [#3710]
-
-## Notes on wlroots-0.20
-
-There are some regression warnings worth noting for the switch to wlroots 0.20:
-
-- With wlroots < 0.20.2 lxqt-panel auto-hiding does not work with a panel size
-  greater than 40 [#3600] [wlroots-5392] [wlroots-5407]
-- Some Wine game windows disappear after alt-tab. It is not yet clear where the
-  bug is, but the issue manifests itself when running wlroots-0.20 [#3615]
-  [wlroots-4103]
-- `wl_output` make/model properties are no longer sent because these are legacy
-  and should not be relied on [wlroots-5045]
-
-[wlroots-5392]: https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/5392
-[wlroots-5407]: https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/5407
-[wlroots-4103]: https://gitlab.freedesktop.org/wlroots/wlroots/-/work_items/4103
-[wlroots-5045]: https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/5045
 
 ## 0.20.2 - 2026-08-21
 
@@ -2888,10 +2915,10 @@ Compile with wlroots 0.12.0 and wayland-server >=1.16
 
 [Keep a Changelog]: https://keepachangelog.com/en/1.0.0/
 [unreleased-commits]: https://github.com/labwc/labwc/compare/0.20.3...HEAD
-[0.20.3-commits]: https://github.com/labwc/labwc/compare/0.20.2..0.20.3
-[0.20.2-commits]: https://github.com/labwc/labwc/compare/0.20.1..0.20.2
-[0.20.1-commits]: https://github.com/labwc/labwc/compare/0.20.0..0.20.1
-[0.20.0-commits]: https://github.com/labwc/labwc/compare/0.9.5..0.20.0
+[0.20.3-commits]: https://github.com/labwc/labwc/compare/0.20.2...0.20.3
+[0.20.2-commits]: https://github.com/labwc/labwc/compare/0.20.1...0.20.2
+[0.20.1-commits]: https://github.com/labwc/labwc/compare/0.20.0...0.20.1
+[0.20.0-commits]: https://github.com/labwc/labwc/compare/0.9.5...0.20.0
 [0.9.8-commits]: https://github.com/labwc/labwc/compare/0.9.7...0.9.8
 [0.9.7-commits]: https://github.com/labwc/labwc/compare/0.9.6...0.9.7
 [0.9.6-commits]: https://github.com/labwc/labwc/compare/0.9.5...0.9.6
@@ -3195,6 +3222,7 @@ Compile with wlroots 0.12.0 and wayland-server >=1.16
 [#2321]: https://github.com/labwc/labwc/pull/2321
 [#2325]: https://github.com/labwc/labwc/pull/2325
 [#2326]: https://github.com/labwc/labwc/pull/2326
+[#2327]: https://github.com/labwc/labwc/pull/2327
 [#2329]: https://github.com/labwc/labwc/pull/2329
 [#2331]: https://github.com/labwc/labwc/pull/2331
 [#2335]: https://github.com/labwc/labwc/pull/2335
@@ -3440,6 +3468,7 @@ Compile with wlroots 0.12.0 and wayland-server >=1.16
 [#3429]: https://github.com/labwc/labwc/pull/3429
 [#3430]: https://github.com/labwc/labwc/pull/3430
 [#3433]: https://github.com/labwc/labwc/pull/3433
+[#3437]: https://github.com/labwc/labwc/pull/3437
 [#3439]: https://github.com/labwc/labwc/pull/3439
 [#3440]: https://github.com/labwc/labwc/pull/3440
 [#3441]: https://github.com/labwc/labwc/pull/3441
@@ -3498,6 +3527,7 @@ Compile with wlroots 0.12.0 and wayland-server >=1.16
 [#3738]: https://github.com/labwc/labwc/pull/3738
 [#3745]: https://github.com/labwc/labwc/pull/3745
 [#3746]: https://github.com/labwc/labwc/pull/3746
+[#3747]: https://github.com/labwc/labwc/pull/3747
 [#3750]: https://github.com/labwc/labwc/pull/3750
 [#3754]: https://github.com/labwc/labwc/pull/3754
 [#3755]: https://github.com/labwc/labwc/pull/3755
@@ -3506,3 +3536,15 @@ Compile with wlroots 0.12.0 and wayland-server >=1.16
 [#3762]: https://github.com/labwc/labwc/pull/3762
 [#3764]: https://github.com/labwc/labwc/pull/3764
 [#3765]: https://github.com/labwc/labwc/pull/3765
+[#3776]: https://github.com/labwc/labwc/pull/3776
+[#3778]: https://github.com/labwc/labwc/pull/3778
+[#3782]: https://github.com/labwc/labwc/pull/3782
+[#3783]: https://github.com/labwc/labwc/pull/3783
+[#3784]: https://github.com/labwc/labwc/pull/3784
+[#3785]: https://github.com/labwc/labwc/pull/3785
+[#3786]: https://github.com/labwc/labwc/pull/3786
+[#3787]: https://github.com/labwc/labwc/pull/3787
+[#3788]: https://github.com/labwc/labwc/pull/3788
+[#3789]: https://github.com/labwc/labwc/pull/3789
+[#3790]: https://github.com/labwc/labwc/pull/3790
+[#3792]: https://github.com/labwc/labwc/pull/3792

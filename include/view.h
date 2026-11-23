@@ -113,6 +113,7 @@ struct view_impl {
 	void (*configure)(struct view *view, struct wlr_box geo);
 	void (*close)(struct view *view);
 	void (*set_activated)(struct view *view, bool activated);
+	void (*set_suspended)(struct view *view, bool suspended);
 	void (*set_fullscreen)(struct view *view, bool fullscreen);
 	void (*notify_tiled)(struct view *view);
 	void (*maximize)(struct view *view, enum view_axis maximized);
@@ -308,6 +309,7 @@ struct view_query {
 	enum lab_tristate iconified;
 	enum lab_tristate focused;
 	enum lab_tristate omnipresent;
+	enum lab_tristate fullscreen;
 	enum lab_edge tiled;
 	char *tiled_region;
 	char *desktop;
@@ -478,6 +480,8 @@ void view_toggle_keybinds(struct view *view);
 bool view_inhibits_actions(struct view *view, struct wl_list *actions);
 
 void view_set_activated(struct view *view, bool activated);
+void view_set_suspended(struct view *view, bool suspended);
+
 void view_set_output(struct view *view, struct output *output);
 void view_close(struct view *view);
 

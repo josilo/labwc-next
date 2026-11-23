@@ -147,6 +147,10 @@ slant  = "normal"   # normal italic oblique
 # name = "sans"
 # size = 10
 
+# [theme.font.region-drop]
+# name = "sans"
+# size = 10
+
 # ---------------------------------------------------------------------------
 # [keyboard]  Key repeat and bindings
 # ---------------------------------------------------------------------------
@@ -206,6 +210,9 @@ actions = [{name = "SnapToEdge", direction = "up"}]
 [[keyboard.keybind]]
 key = "W-Down"
 actions = [{name = "SnapToEdge", direction = "down"}]
+
+# Conditional fullscreen example (inside [[keyboard.keybind]]):
+# actions = [{name = "If", query = {fullscreen = true}, then = [{name = "UnsetFullscreen"}], else = [{name = "SetFullscreen"}]}]
 
 # ---------------------------------------------------------------------------
 # [mouse]  Pointer settings and bindings
@@ -339,6 +346,10 @@ corner-range = 50
 
 # Dragging to the very top edge maximizes the window
 top-maximize = true
+
+# Show a drop zone at the center of each named region when dragging a
+# floating window without modifiers. Releasing over a zone snaps to it.
+region-drop-indicator = false
 
 # Send xdg-tiling-state hints to clients:
 # "always", "region" (only when region-snapped), "edge", "never"
@@ -569,6 +580,17 @@ border-width   = 1
 # border-colors = ["#8080b3ff", "#8080b3ff", "#8080b3ff"]
 
 # ---------------------------------------------------------------------------
+# [theme.colors.region-drop-indicator]  Named region drop zones
+# ---------------------------------------------------------------------------
+[theme.colors.region-drop-indicator]
+width = 90
+height = 60
+border-width = 2
+border = "#aaaaaa80"
+bg = "#e1dedb80"
+text = "#000000"
+
+# ---------------------------------------------------------------------------
 # [theme.colors.magnifier]  Screen magnifier border
 # ---------------------------------------------------------------------------
 [theme.colors.magnifier]
@@ -579,7 +601,6 @@ border       = "#ff0000"
 # [[menu]]  Static menu definitions
 #
 # Any number of [[menu]] blocks can appear in any *.toml file.
-# They are loaded before menu.xml, so TOML menus take precedence.
 #
 # Supported item types (inside [[menu.item]]):
 #   separator = true           — plain separator line

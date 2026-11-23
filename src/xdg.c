@@ -332,9 +332,12 @@ handle_commit(struct wl_listener *listener, void *data)
 		 * actual geometry (size *and* position, depending on the edge
 		 * from which the resize was attempted). When no other
 		 * configure is pending, re-sync the pending geometry with the
-		 * actual view.
+		 * actual view. Fullscreen, fully maximized and tiled views must
+		 * retain the compositor's requested size for subsequent configures.
 		 */
-		if (!view->pending_configure_serial) {
+		if (!view->pending_configure_serial && !view->fullscreen
+				&& view->maximized != VIEW_AXIS_BOTH
+				&& !view_is_tiled(view)) {
 			snap_constraints_update(view);
 			view->pending = view->current;
 
@@ -425,9 +428,12 @@ handle_configure_timeout(void *data)
 	center_fullscreen_if_needed(view);
 	view_moved(view);
 
-	/* Re-sync pending view with current state */
-	snap_constraints_update(view);
-	view->pending = view->current;
+	/* Preserve the requested size for fullscreen/fully maximized/tiled views. */
+	if (!view->fullscreen && view->maximized != VIEW_AXIS_BOTH
+			&& !view_is_tiled(view)) {
+		snap_constraints_update(view);
+		view->pending = view->current;
+	}
 
 	return 0; /* ignored per wl_event_loop docs */
 }
@@ -756,11 +762,26 @@ static void
 xdg_toplevel_view_set_activated(struct view *view, bool activated)
 {
 	if (!xdg_toplevel_from_view(view)->base->initialized) {
-		wlr_log(WLR_DEBUG, "Prevented activating a non-intialized view");
+		wlr_log(WLR_DEBUG, "Prevented activating a non-initialized view");
 		return;
 	}
 	uint32_t serial = wlr_xdg_toplevel_set_activated(
 		xdg_toplevel_from_view(view), activated);
+	if (serial > 0) {
+		set_pending_configure_serial(view, serial);
+	}
+}
+
+static void
+xdg_toplevel_view_set_suspended(struct view *view, bool suspended)
+{
+	assert(view);
+	struct wlr_xdg_toplevel *toplevel = xdg_toplevel_from_view(view);
+	if (!toplevel->base->initialized) {
+		wlr_log(WLR_DEBUG, "Prevented suspending a non-initialized view");
+		return;
+	}
+	uint32_t serial = wlr_xdg_toplevel_set_suspended(toplevel, suspended);
 	if (serial > 0) {
 		set_pending_configure_serial(view, serial);
 	}
@@ -917,6 +938,7 @@ static const struct view_impl xdg_toplevel_view_impl = {
 	.configure = xdg_toplevel_view_configure,
 	.close = xdg_toplevel_view_close,
 	.set_activated = xdg_toplevel_view_set_activated,
+	.set_suspended = xdg_toplevel_view_set_suspended,
 	.set_fullscreen = xdg_toplevel_view_set_fullscreen,
 	.notify_tiled = xdg_toplevel_view_notify_tiled,
 	.maximize = xdg_toplevel_view_maximize,

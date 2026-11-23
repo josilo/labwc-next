@@ -560,6 +560,29 @@ parse_snapping_colors(toml_datum_t root, struct theme *theme)
  * [theme.colors.magnifier]
  */
 static void
+parse_region_drop_indicator_colors(toml_datum_t root, struct theme *theme)
+{
+	toml_datum_t sec = toml_seek(root, "theme.colors.region-drop-indicator");
+	if (sec.type != TOML_TABLE) {
+		return;
+	}
+	struct drop_indicator_theme *indicator = &theme->region_drop_indicator;
+	int i;
+	if (toml_int(sec, "width", &i) && i > 0) {
+		indicator->width = i;
+	}
+	if (toml_int(sec, "height", &i) && i > 0) {
+		indicator->height = i;
+	}
+	if (toml_int(sec, "border-width", &i) && i >= 0) {
+		indicator->border_width = i;
+	}
+	toml_color(sec, "border", indicator->border_color);
+	toml_color(sec, "bg", indicator->bg_color);
+	toml_color(sec, "text", indicator->text_color);
+}
+
+static void
 parse_magnifier_colors(toml_datum_t root, struct theme *theme)
 {
 	toml_datum_t sec = toml_seek(root, "theme.colors.magnifier");
@@ -599,6 +622,7 @@ apply_toml(toml_datum_t root, struct theme *theme)
 	parse_menu_colors(root, theme);
 	parse_osd_colors(root, theme);
 	parse_snapping_colors(root, theme);
+	parse_region_drop_indicator_colors(root, theme);
 	parse_magnifier_colors(root, theme);
 }
 

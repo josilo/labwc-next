@@ -186,6 +186,10 @@ view_matches_query(struct view *view, struct view_query *query)
 		return false;
 	}
 
+	if (!query_tristate_match(query->fullscreen, view->fullscreen)) {
+		return false;
+	}
+
 	if (query->tiled == LAB_EDGE_ANY) {
 		if (!view->tiled) {
 			return false;
@@ -481,6 +485,15 @@ view_set_activated(struct view *view, bool activated)
 		}
 	}
 	output_set_has_fullscreen_view(view->output, view->fullscreen);
+}
+
+void
+view_set_suspended(struct view *view, bool suspended)
+{
+	assert(view);
+	if (view->impl->set_suspended) {
+		view->impl->set_suspended(view, suspended);
+	}
 }
 
 void
@@ -1592,6 +1605,13 @@ view_move_to_workspace(struct view *view, struct workspace *workspace)
 		view->workspace = workspace;
 		wlr_scene_node_reparent(&view->scene_tree->node,
 			workspace->view_trees[view->layer]);
+		if (workspace != server.workspaces.current) {
+			if (!view->visible_on_all_workspaces) {
+				view_set_suspended(view, true);
+			}
+		} else {
+			view_set_suspended(view, false);
+		}
 	}
 }
 
@@ -1765,31 +1785,30 @@ view_adjust_for_layout_change(struct view *view)
 
 	view->adjusting_for_layout_change = true;
 
-	struct wlr_box new_geo;
-	struct output *output = output_from_name(view->last_placement.output_name);
-	if (output_is_usable(output)) {
-		/*
-		 * When the previous output (which might have been reconnected
-		 * or relocated) is available, keep the relative position on it.
-		 */
-		new_geo = view->last_placement.relative_geo;
-		new_geo.x += output->scene_output->x;
-		new_geo.y += output->scene_output->y;
-		view->output = output;
-	} else {
-		/*
-		 * Otherwise, evacuate the view to another output. Use the last
-		 * layout geometry so that the view position is kept when the
-		 * user reconnects the previous output in a different connector
-		 * or the reconnected output somehow gets a different name.
-		 */
-		view_discover_output(view, &view->last_placement.layout_geo);
-		new_geo = view->last_placement.layout_geo;
-	}
-
 	if (!view_is_floating(view)) {
 		view_apply_special_geometry(view);
 	} else {
+		struct wlr_box new_geo;
+		struct output *output = output_from_name(view->last_placement.output_name);
+		if (output_is_usable(output)) {
+			/*
+			 * When the previous output (which might have been reconnected
+			 * or relocated) is available, keep the relative position on it.
+			 */
+			new_geo = view->last_placement.relative_geo;
+			new_geo.x += output->scene_output->x;
+			new_geo.y += output->scene_output->y;
+			view->output = output;
+		} else {
+			/*
+			 * Otherwise, evacuate the view to another output. Use the last
+			 * layout geometry so that the view position is kept when the
+			 * user reconnects the previous output in a different connector
+			 * or the reconnected output somehow gets a different name.
+			 */
+			view_discover_output(view, &view->last_placement.layout_geo);
+			new_geo = view->last_placement.layout_geo;
+		}
 		/* Ensure view is on-screen */
 		adjust_floating_geometry(view, &new_geo,
 			/* midpoint_visibility */ true);

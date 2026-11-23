@@ -225,6 +225,7 @@ rcxml_init(void)
 	init_font_defaults(&rc.font_menuheader);
 	init_font_defaults(&rc.font_menuitem);
 	init_font_defaults(&rc.font_osd);
+	init_font_defaults(&rc.font_regiondrop);
 
 	rc.focus_follow_mouse = false;
 	rc.focus_follow_mouse_requires_movement = true;
@@ -276,6 +277,7 @@ rcxml_init(void)
 	rc.resize_draw_contents = true;
 	rc.resize_corner_range = -1;
 	rc.resize_minimum_area = 8;
+	rc.regions_drop_indicator = false;
 
 	rc.workspace_config.popuptime = INT_MIN;
 	rc.workspace_config.min_nr_workspaces = 1;
@@ -539,6 +541,9 @@ post_processing(void)
 	if (!rc.font_osd.name) {
 		rc.font_osd.name = xstrdup("sans");
 	}
+	if (!rc.font_regiondrop.name) {
+		rc.font_regiondrop.name = xstrdup("sans");
+	}
 	if (!libinput_category_get_default()) {
 		/* So we set default values of <tap> and <scrollFactor> */
 		struct libinput_category *l = libinput_category_create();
@@ -689,6 +694,7 @@ rcxml_finish(void)
 	zfree(rc.font_menuheader.name);
 	zfree(rc.font_menuitem.name);
 	zfree(rc.font_osd.name);
+	zfree(rc.font_regiondrop.name);
 	zfree(rc.prompt_command);
 	zfree(rc.error_command);
 	zfree(rc.bell_command);
